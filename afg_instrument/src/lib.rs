@@ -13,14 +13,33 @@ pub enum AccessKind {
     Write,
 }
 
+/// What to inject at a site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SiteAction {
+    /// Record an access to a static PANode (monitor + access macros). If
+    /// `call_name` is set, the macros are inserted right after the line where
+    /// that call appears (searching from the site line), which is more reliable
+    /// than a raw debug line for call results.
+    Access {
+        panode: u64,
+        function_id: Option<u64>,
+        access: AccessKind,
+        call_name: Option<String>,
+    },
+    /// Establish the runtime principal for the current task. Injected before the
+    /// auth call line; the instrumenter extracts the auth call's first argument
+    /// from the source as the principal (convention: first arg = the user).
+    Auth {
+        /// The auth function's short name to locate in the source line (e.g. "decode").
+        call_name: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstrumentSite {
     pub file: PathBuf,
     pub line: usize,
-    pub panode: u64,
-    pub function_id: Option<u64>,
-    pub site_id: u64,
-    pub access: AccessKind,
+    pub action: SiteAction,
     pub reason: String,
 }
 
@@ -48,9 +67,7 @@ pub fn instrument_project(
         by_file.entry(site.file.clone()).or_default().push(site);
     }
 
-    for (rel, mut sites) in by_file {
-        // Insert from the bottom up so earlier insertions don't shift later lines.
-        sites.sort_by_key(|s| std::cmp::Reverse(s.line));
+    for (rel, sites) in by_file {
         let path = match resolve_target_file(dst, &rel) {
             Some(p) => p,
             None => {
@@ -66,30 +83,104 @@ pub fn instrument_project(
         let text = fs::read_to_string(&path)?;
         let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
 
-        for site in sites {
-            if site.line == 0 || site.line > lines.len() + 1 {
+        // Compute (insert_index, injected_text) for every site, then apply
+        // bottom-up so earlier insertions don't shift later indices.
+        let mut inserts: Vec<(usize, String)> = Vec::new();
+        for site in &sites {
+            if site.line == 0 || site.line > lines.len() {
                 continue;
             }
-            let fn_id = site.function_id.unwrap_or(0);
-            let kind = match site.access {
-                AccessKind::Read => "Read",
-                AccessKind::Write => "Write",
-            };
+            match &site.action {
+                SiteAction::Access {
+                    panode,
+                    function_id,
+                    access,
+                    call_name,
+                } => {
+                    let fn_id = function_id.unwrap_or(0);
+                    let kind = match access {
+                        AccessKind::Read => "Read",
+                        AccessKind::Write => "Write",
+                    };
+                    let injected = format!(
+                        "afg_runtime::afg_monitor!(function = {fn_id});\nafg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                    );
+                    // Insert before the located call line (executed path, and
+                    // syntactically safe even when the call is a tail expression),
+                    // else at the site line.
+                    let idx = match call_name {
+                        Some(name) => {
+                            find_call_line(&lines, site.line - 1, name).unwrap_or(site.line - 1)
+                        }
+                        None => site.line - 1,
+                    };
+                    inserts.push((idx, injected));
+                }
+                SiteAction::Auth { call_name } => {
+                    let principal = extract_first_arg(&lines[site.line - 1], call_name)
+                        .unwrap_or_else(|| "\"unknown\"".to_string());
+                    let injected = format!(
+                        "afg_runtime::afg_auth!(principal = {principal}, method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
+                    );
+                    inserts.push((site.line - 1, injected));
+                }
+            }
+        }
 
-            // Fully-qualified paths so the instrumented file needs no `use`
-            // imports for the macros or AccessKind.
-            let injected = format!(
-                "afg_runtime::afg_monitor!(function = {fn_id});\nafg_runtime::afg_access!(node = {}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});",
-                site.panode
-            );
-
-            lines.insert(site.line - 1, injected);
+        inserts.sort_by(|a, b| b.0.cmp(&a.0));
+        for (idx, text) in inserts {
+            let idx = idx.min(lines.len());
+            lines.insert(idx, text);
         }
 
         fs::write(path, lines.join("\n") + "\n")?;
     }
 
     Ok(())
+}
+
+/// Index of the first line at/after `start` containing a call `call_name(`.
+fn find_call_line(lines: &[String], start: usize, call_name: &str) -> Option<usize> {
+    let pat = format!("{call_name}(");
+    lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, l)| l.contains(&pat))
+        .map(|(i, _)| i)
+}
+
+/// Extract the first argument expression of a call to `call_name` from a source
+/// line (used as the runtime principal). Returns the trimmed argument text.
+fn extract_first_arg(line: &str, call_name: &str) -> Option<String> {
+    let pat = format!("{call_name}(");
+    let start = line.find(&pat)? + pat.len();
+    let rest = &line[start..];
+    let mut depth = 0i32;
+    let mut end = rest.len();
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => {
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let arg = rest[..end].trim();
+    if arg.is_empty() {
+        None
+    } else {
+        Some(arg.to_string())
+    }
 }
 
 /// Append an `afg-runtime` path dependency to the instrumented app's Cargo.toml

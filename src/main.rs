@@ -6,7 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use afg_instrument::{instrument_project, AccessKind, InstrumentSite, InstrumentationPlan};
+use afg_instrument::{
+    instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
+};
 use afg_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
 use afg_scheduler::{generate_schedules, write_schedule};
 
@@ -45,6 +47,11 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     replay: bool,
 
+    /// cargo subcommand the observe stage runs on the instrumented app
+    /// ("test" for test-based apps, "run" for a main-based demo)
+    #[arg(long, default_value = "test")]
+    cargo_cmd: String,
+
     /// Run only the static stage (PAG + AFG engine + overlap detection) and
     /// stop after writing the instrumentation plan. Use this on a compiled
     /// real-world app when its source is not available for instrumentation.
@@ -66,12 +73,27 @@ fn hash_fn_id(name: &str) -> u64 {
     h.finish()
 }
 
+/// Project-relative source location of a PANode, if it has debug info.
+fn node_loc(engine: &ll_parser::AFGContextEngine<'_>, node_id: usize) -> Option<(String, usize)> {
+    let node = engine.nodes.get(&node_id)?;
+    let loc = node.source_loc.as_ref()?;
+    let file = loc.file.clone()?;
+    let line = loc.line? as usize;
+    Some((
+        file.trim_start_matches("./")
+            .trim_start_matches('/')
+            .to_string(),
+        line,
+    ))
+}
+
 /// Adapter between this prototype and our existing ll_parser + nested afg-engine.
 ///
-/// Parses the LLVM IR, runs the PAG + AFG engine, and turns the cross-user
-/// overlaps (PANodes reached by two or more distinct principals) into an
-/// `InstrumentationPlan`. Tolerant of zero overlaps: emits an empty plan until
-/// the engine's principal propagation produces data.
+/// Parses the LLVM IR, runs the PAG + AFG engine, and emits an
+/// `InstrumentationPlan`: `Auth` sites at access-control points (so the runtime
+/// per-user principal is established) and `Access` sites at LLM calls and any
+/// statically-detected cross-user overlaps. The dynamic stages then distinguish
+/// users at runtime.
 fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<StaticStageResult> {
     use std::collections::HashSet;
 
@@ -109,9 +131,65 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
         engine.node_contexts.len()
     );
 
-    // A cross-user overlap is a PANode whose context set carries two or more
-    // distinct principals (by auth callsite). Map each to an InstrumentSite.
+    use ll_parser::afg_engine::SemanticPointKind;
     let mut sites: Vec<InstrumentSite> = Vec::new();
+    let (mut n_auth, mut n_access) = (0usize, 0usize);
+
+    // 1) Auth sites at access-control points; 2) Access sites at LLM calls.
+    for point in engine.semantic_points.iter() {
+        match &point.kind {
+            SemanticPointKind::AccessControl { .. }
+            | SemanticPointKind::AccessControlRecovery { .. } => {
+                // Location = the auth call site (its result node); the instrumenter
+                // extracts the call's first argument as the runtime principal.
+                let node = point.result_node.or_else(|| point.argument_nodes.first().copied());
+                let Some(node) = node else { continue };
+                let Some((file, line)) = node_loc(&engine, node) else {
+                    continue;
+                };
+                let matched = &point.security_point.matched_fn_name;
+                let call_name = matched.rsplit("::").next().unwrap_or(matched).to_string();
+                sites.push(InstrumentSite {
+                    file: file.into(),
+                    line,
+                    action: SiteAction::Auth {
+                        call_name: call_name.clone(),
+                    },
+                    reason: format!("auth point: {call_name}"),
+                });
+                n_auth += 1;
+            }
+            SemanticPointKind::LlmCall { .. } | SemanticPointKind::LlmPrompt { .. } => {
+                let node = point.result_node.or_else(|| point.argument_nodes.first().copied());
+                let Some(node) = node else { continue };
+                // Location hint from any node at the call; the instrumenter then
+                // locates the actual call line by name and inserts after it.
+                let loc = node_loc(&engine, node).or_else(|| {
+                    point.argument_nodes.iter().find_map(|n| node_loc(&engine, *n))
+                });
+                let Some((file, line)) = loc else { continue };
+                let matched = &point.security_point.matched_fn_name;
+                let short = matched.rsplit("::").next().unwrap_or(matched).to_string();
+                let function_id = engine.nodes.get(&node).and_then(|n| n.function()).map(hash_fn_id);
+                sites.push(InstrumentSite {
+                    file: file.into(),
+                    line,
+                    action: SiteAction::Access {
+                        panode: node as u64,
+                        function_id,
+                        access: AccessKind::Read,
+                        call_name: Some(short),
+                    },
+                    reason: format!("llm access: {}", point.callee.as_deref().unwrap_or("?")),
+                });
+                n_access += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // 3) Any statically-detected cross-user overlaps (nodes reached by >=2 distinct
+    // principals) also become access sites.
     for (node_id, ctxs) in engine.node_contexts.iter() {
         let principals: HashSet<usize> = ctxs
             .iter()
@@ -123,43 +201,26 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
         if principals.len() < 2 {
             continue;
         }
-
-        // We can only instrument a node that has a source location.
-        let Some(node) = engine.nodes.get(node_id) else {
-            continue;
-        };
-        let Some(loc) = node.source_loc.as_ref() else {
-            continue;
-        };
-        let (Some(file), Some(line)) = (loc.file.clone(), loc.line) else {
-            continue;
-        };
-
-        // Gap 2: normalize to a project-relative path. LLVM debug `file` is
-        // usually already relative (e.g. "src/foo.rs"); strip any "./" or
-        // leading slash so it joins cleanly under the instrumented project.
-        let rel_file = file
-            .trim_start_matches("./")
-            .trim_start_matches('/')
-            .to_string();
-
-        // Gap 3: real function_id (stable hash of the enclosing function) and a
-        // distinct site_id (the PANode id). Access defaults to Read; per-site
-        // read/write refinement needs per-access (load/store) instrumentation.
-        let function_id = node.function().map(hash_fn_id);
-
-        sites.push(InstrumentSite {
-            file: rel_file.into(),
-            line: line as usize,
-            panode: *node_id as u64,
-            function_id,
-            site_id: *node_id as u64,
-            access: AccessKind::Read,
-            reason: format!("cross-user overlap ({} principals)", principals.len()),
-        });
+        if let Some((file, line)) = node_loc(&engine, *node_id) {
+            let function_id = engine.nodes.get(node_id).and_then(|n| n.function()).map(hash_fn_id);
+            sites.push(InstrumentSite {
+                file: file.into(),
+                line,
+                action: SiteAction::Access {
+                    panode: *node_id as u64,
+                    function_id,
+                    access: AccessKind::Read,
+                    call_name: None,
+                },
+                reason: format!("static cross-user overlap ({} principals)", principals.len()),
+            });
+        }
     }
 
-    println!("      cross-user overlap sites: {}", sites.len());
+    println!(
+        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {} total",
+        sites.len()
+    );
     Ok(StaticStageResult {
         instrumentation_plan: InstrumentationPlan { sites },
     })
@@ -213,7 +274,7 @@ fn main() -> Result<()> {
             seed,
             trace_path: trace.clone(),
             schedule_path: None,
-            cargo_args: vec!["test".into()],
+            cargo_args: vec![cli.cargo_cmd.clone()],
         })
         .with_context(|| format!("observation failed for seed {seed}"))?;
 
@@ -253,7 +314,7 @@ fn main() -> Result<()> {
                         .join("schedule")
                         .join(format!("schedule-{i:03}.json")),
                 ),
-                cargo_args: vec!["test".into()],
+                cargo_args: vec![cli.cargo_cmd.clone()],
             })?;
         }
     } else {
