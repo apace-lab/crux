@@ -1,0 +1,9 @@
+[package]
+name = "afg_dyn_demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+afg-runtime = { path = "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_observer/afg-runtime" }
+madsim = "=0.2.31"
+tokio = { version = "=0.2.30", package = "madsim-tokio", features = ["rt", "sync", "macros", "time"] }
