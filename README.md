@@ -21,7 +21,7 @@ parent/
 ll_parser = { path = "../ll-parser" }
 ```
 
-The nested AFG engine does not move (which is in `ll-parser` now).
+This project uses (ll-parser)[https://github.com/apace-lab/ll_parser.git] as dependency for static taint analysis, where `arg-engine` generates the taint results from running pointer analysis by `ll-parser`.
 
 ## Pipeline
 
