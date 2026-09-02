@@ -32,7 +32,7 @@ struct Cli {
     ac: PathBuf,
 
     /// Path to the afg-runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "../afg_observer/afg-runtime")]
+    #[arg(long, default_value = "afg-runtime")]
     afg_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]
@@ -52,11 +52,17 @@ struct Cli {
     #[arg(long, default_value = "test")]
     cargo_cmd: String,
 
-    /// Run only the static stage (PAG + AFG engine + overlap detection) and
+    /// Run only the static stage (PAG + taint analysis + overlap detection) and
     /// stop after writing the instrumentation plan. Use this on a compiled
     /// real-world app when its source is not available for instrumentation.
     #[arg(long, default_value_t = false)]
     static_only: bool,
+
+    /// Run producer + source instrumentation, then stop (skip observe / schedule
+    /// / replay). Use to instrument an app you will run yourself, e.g. a live web
+    /// server on real tokio instead of the MadSim observe stage.
+    #[arg(long, default_value_t = false)]
+    instrument_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +80,7 @@ fn hash_fn_id(name: &str) -> u64 {
 }
 
 /// Project-relative source location of a PANode, if it has debug info.
-fn node_loc(engine: &ll_parser::AFGContextEngine<'_>, node_id: usize) -> Option<(String, usize)> {
+fn node_loc(engine: &ll_parser::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
     let node = engine.nodes.get(&node_id)?;
     let loc = node.source_loc.as_ref()?;
     let file = loc.file.clone()?;
@@ -87,9 +93,27 @@ fn node_loc(engine: &ll_parser::AFGContextEngine<'_>, node_id: usize) -> Option<
     ))
 }
 
-/// Adapter between this prototype and our existing ll_parser + nested afg-engine.
+/// Whether an access-control point establishes the request principal (a token,
+/// session, or identity we can name from the call's first argument) or is only a
+/// credential check. Password / secret verifiers such as argon2 and bcrypt take
+/// the secret as their first argument, not the user, so they are credential
+/// checks: the principal is established at a separate token / session / identity
+/// point. Only principal-establishing points get an `afg_auth!` site. Keying this
+/// on the matched catalog function (which the taint analysis already resolved) is
+/// more reliable than inspecting the source line at instrument time.
+fn establishes_principal(matched_fn_name: &str) -> bool {
+    let short = matched_fn_name
+        .rsplit("::")
+        .next()
+        .unwrap_or(matched_fn_name);
+    let credential_check = short == "verify_password"       // argon2 PasswordVerifier
+        || matched_fn_name.starts_with("bcrypt::verify");   // bcrypt::verify
+    !credential_check
+}
+
+/// Adapter between this prototype and our existing ll_parser + nested taint analysis.
 ///
-/// Parses the LLVM IR, runs the PAG + AFG engine, and emits an
+/// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
 /// `InstrumentationPlan`: `Auth` sites at access-control points (so the runtime
 /// per-user principal is established) and `Access` sites at LLM calls and any
 /// statically-detected cross-user overlaps. The dynamic stages then distinguish
@@ -121,25 +145,34 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     );
     analysis.set_context_catalogs(llm_sigs, ac_sigs);
 
-    // Build the PAG (afg mode) and run the AFG engine.
-    let engine = analysis.afg_engine("afg", None);
+    // Build the PAG (afg mode) and run the taint analysis.
+    let engine = analysis.taint_analysis("afg", None);
     println!(
-        "      afg engine: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
+        "      taint analysis: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
         engine.app_crate,
         engine.semantic_points.len(),
         engine.active_principals.len(),
         engine.node_contexts.len()
     );
 
-    use ll_parser::afg_engine::SemanticPointKind;
+    use ll_parser::taint_analysis::SemanticPointKind;
     let mut sites: Vec<InstrumentSite> = Vec::new();
-    let (mut n_auth, mut n_access) = (0usize, 0usize);
+    let (mut n_auth, mut n_access, mut n_credential) = (0usize, 0usize, 0usize);
 
     // 1) Auth sites at access-control points; 2) Access sites at LLM calls.
     for point in engine.semantic_points.iter() {
         match &point.kind {
             SemanticPointKind::AccessControl { .. }
             | SemanticPointKind::AccessControlRecovery { .. } => {
+                let matched = &point.security_point.matched_fn_name;
+                // Only principal-establishing auth points get an afg_auth! site.
+                // Credential checks (argon2/bcrypt password verifiers) authenticate
+                // but do not name the user, so the principal is established at a
+                // separate token / session / identity point.
+                if !establishes_principal(matched) {
+                    n_credential += 1;
+                    continue;
+                }
                 // Location = the auth call site (its result node); the instrumenter
                 // extracts the call's first argument as the runtime principal.
                 let node = point.result_node.or_else(|| point.argument_nodes.first().copied());
@@ -147,7 +180,6 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                 let Some((file, line)) = node_loc(&engine, node) else {
                     continue;
                 };
-                let matched = &point.security_point.matched_fn_name;
                 let call_name = matched.rsplit("::").next().unwrap_or(matched).to_string();
                 sites.push(InstrumentSite {
                     file: file.into(),
@@ -179,6 +211,9 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                         function_id,
                         access: AccessKind::Read,
                         call_name: Some(short),
+                        // gate this access so a replay schedule can order it
+                        // across principals (the LLM call sits in an async fn).
+                        schedule_site: Some(node as u64),
                     },
                     reason: format!("llm access: {}", point.callee.as_deref().unwrap_or("?")),
                 });
@@ -211,6 +246,8 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                     function_id,
                     access: AccessKind::Read,
                     call_name: None,
+                    // no gate: static-overlap sites may not sit in an async fn.
+                    schedule_site: None,
                 },
                 reason: format!("static cross-user overlap ({} principals)", principals.len()),
             });
@@ -218,7 +255,7 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     }
 
     println!(
-        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {} total",
+        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {} total ({n_credential} credential-check point(s) skipped)",
         sites.len()
     );
     Ok(StaticStageResult {
@@ -260,6 +297,14 @@ fn main() -> Result<()> {
         &static_result.instrumentation_plan,
         &cli.afg_runtime,
     )?;
+
+    if cli.instrument_only {
+        println!(
+            "instrument-only: wrote AFG-instrumented app to {}; run it yourself.",
+            instrumented_project.display()
+        );
+        return Ok(());
+    }
 
     println!("[3/6] MadSim observation");
     let mut trace_paths = Vec::new();
@@ -323,4 +368,24 @@ fn main() -> Result<()> {
 
     println!("AFG pipeline completed: {}", cli.run_dir.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::establishes_principal;
+
+    #[test]
+    fn credential_checks_are_not_principal_sources() {
+        // Password / secret verifiers: authenticate, but do not name the user.
+        assert!(!establishes_principal("argon2::PasswordVerifier::verify_password"));
+        assert!(!establishes_principal("bcrypt::verify"));
+    }
+
+    #[test]
+    fn token_and_identity_points_are_principal_sources() {
+        // Token / session / identity points: their first argument names the user.
+        assert!(establishes_principal("jsonwebtoken::decode"));
+        assert!(establishes_principal("actix_identity::Identity::id"));
+        assert!(establishes_principal("ldap3::Ldap::simple_bind"));
+    }
 }

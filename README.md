@@ -6,7 +6,7 @@ Expected project structure:
 parent/
 ├── ll-parser/
 │   └── src/
-│       └── afg-engine.rs
+│       └── taint_analysis.rs
 └── afg/
     ├── Cargo.toml
     ├── src/main.rs // take user commands
@@ -21,14 +21,14 @@ parent/
 ll_parser = { path = "../ll-parser" }
 ```
 
-This project uses (ll-parser)[https://github.com/apace-lab/ll_parser.git] as dependency for static taint analysis, where `arg-engine` generates the taint results from running pointer analysis by `ll-parser`.
+This project uses (ll-parser)[https://github.com/apace-lab/ll_parser.git] as dependency for static taint analysis, where the `taint_analysis` module generates the taint results from running pointer analysis by `ll-parser`.
 
 ## Pipeline
 
 ```text
 LLVM IR
   -> ll_parser PAG
-    -> run AFG engine together
+    -> run taint analysis together
   -> afg_instrument
     -> create InstrumentationPlan
     -> instrument app
