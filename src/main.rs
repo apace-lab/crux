@@ -57,6 +57,12 @@ struct Cli {
     /// real-world app when its source is not available for instrumentation.
     #[arg(long, default_value_t = false)]
     static_only: bool,
+
+    /// Run producer + source instrumentation, then stop (skip observe / schedule
+    /// / replay). Use to instrument an app you will run yourself, e.g. a live web
+    /// server on real tokio instead of the MadSim observe stage.
+    #[arg(long, default_value_t = false)]
+    instrument_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,6 +297,14 @@ fn main() -> Result<()> {
         &static_result.instrumentation_plan,
         &cli.afg_runtime,
     )?;
+
+    if cli.instrument_only {
+        println!(
+            "instrument-only: wrote AFG-instrumented app to {}; run it yourself.",
+            instrumented_project.display()
+        );
+        return Ok(());
+    }
 
     println!("[3/6] MadSim observation");
     let mut trace_paths = Vec::new();
