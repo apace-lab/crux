@@ -52,7 +52,7 @@ struct Cli {
     #[arg(long, default_value = "test")]
     cargo_cmd: String,
 
-    /// Run only the static stage (PAG + AFG engine + overlap detection) and
+    /// Run only the static stage (PAG + taint analysis + overlap detection) and
     /// stop after writing the instrumentation plan. Use this on a compiled
     /// real-world app when its source is not available for instrumentation.
     #[arg(long, default_value_t = false)]
@@ -74,7 +74,7 @@ fn hash_fn_id(name: &str) -> u64 {
 }
 
 /// Project-relative source location of a PANode, if it has debug info.
-fn node_loc(engine: &ll_parser::AFGContextEngine<'_>, node_id: usize) -> Option<(String, usize)> {
+fn node_loc(engine: &ll_parser::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
     let node = engine.nodes.get(&node_id)?;
     let loc = node.source_loc.as_ref()?;
     let file = loc.file.clone()?;
@@ -87,9 +87,9 @@ fn node_loc(engine: &ll_parser::AFGContextEngine<'_>, node_id: usize) -> Option<
     ))
 }
 
-/// Adapter between this prototype and our existing ll_parser + nested afg-engine.
+/// Adapter between this prototype and our existing ll_parser + nested taint analysis.
 ///
-/// Parses the LLVM IR, runs the PAG + AFG engine, and emits an
+/// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
 /// `InstrumentationPlan`: `Auth` sites at access-control points (so the runtime
 /// per-user principal is established) and `Access` sites at LLM calls and any
 /// statically-detected cross-user overlaps. The dynamic stages then distinguish
@@ -121,17 +121,17 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     );
     analysis.set_context_catalogs(llm_sigs, ac_sigs);
 
-    // Build the PAG (afg mode) and run the AFG engine.
-    let engine = analysis.afg_engine("afg", None);
+    // Build the PAG (afg mode) and run the taint analysis.
+    let engine = analysis.taint_analysis("afg", None);
     println!(
-        "      afg engine: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
+        "      taint analysis: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
         engine.app_crate,
         engine.semantic_points.len(),
         engine.active_principals.len(),
         engine.node_contexts.len()
     );
 
-    use ll_parser::afg_engine::SemanticPointKind;
+    use ll_parser::taint_analysis::SemanticPointKind;
     let mut sites: Vec<InstrumentSite> = Vec::new();
     let (mut n_auth, mut n_access) = (0usize, 0usize);
 
