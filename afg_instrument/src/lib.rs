@@ -25,6 +25,10 @@ pub enum SiteAction {
         function_id: Option<u64>,
         access: AccessKind,
         call_name: Option<String>,
+        /// If set (and `call_name` is set, i.e. an async call site), an
+        /// `afg_schedule_point!(site = ..)` gate is inserted just before the
+        /// access so a replay schedule can order this access across principals.
+        schedule_site: Option<u64>,
     },
     /// Establish the runtime principal for the current task. Injected before the
     /// auth call line; the instrumenter extracts the auth call's first argument
@@ -96,14 +100,24 @@ pub fn instrument_project(
                     function_id,
                     access,
                     call_name,
+                    schedule_site,
                 } => {
                     let fn_id = function_id.unwrap_or(0);
                     let kind = match access {
                         AccessKind::Read => "Read",
                         AccessKind::Write => "Write",
                     };
+                    // A schedule gate is only inserted for located call sites
+                    // (`call_name` set), which sit in an async fn where `.await`
+                    // is valid; a replay schedule then orders this access.
+                    let gate = match (schedule_site, call_name) {
+                        (Some(site), Some(_)) => {
+                            format!("afg_runtime::afg_schedule_point!(site = {site}).await;\n")
+                        }
+                        _ => String::new(),
+                    };
                     let injected = format!(
-                        "afg_runtime::afg_monitor!(function = {fn_id});\nafg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                        "{gate}afg_runtime::afg_monitor!(function = {fn_id});\nafg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
                     );
                     // Insert before the located call line (executed path, and
                     // syntactically safe even when the call is a tail expression),

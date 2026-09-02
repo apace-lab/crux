@@ -205,6 +205,9 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                         function_id,
                         access: AccessKind::Read,
                         call_name: Some(short),
+                        // gate this access so a replay schedule can order it
+                        // across principals (the LLM call sits in an async fn).
+                        schedule_site: Some(node as u64),
                     },
                     reason: format!("llm access: {}", point.callee.as_deref().unwrap_or("?")),
                 });
@@ -237,6 +240,8 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                     function_id,
                     access: AccessKind::Read,
                     call_name: None,
+                    // no gate: static-overlap sites may not sit in an async fn.
+                    schedule_site: None,
                 },
                 reason: format!("static cross-user overlap ({} principals)", principals.len()),
             });
