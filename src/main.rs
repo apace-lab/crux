@@ -87,6 +87,24 @@ fn node_loc(engine: &ll_parser::TaintAnalysis<'_>, node_id: usize) -> Option<(St
     ))
 }
 
+/// Whether an access-control point establishes the request principal (a token,
+/// session, or identity we can name from the call's first argument) or is only a
+/// credential check. Password / secret verifiers such as argon2 and bcrypt take
+/// the secret as their first argument, not the user, so they are credential
+/// checks: the principal is established at a separate token / session / identity
+/// point. Only principal-establishing points get an `afg_auth!` site. Keying this
+/// on the matched catalog function (which the taint analysis already resolved) is
+/// more reliable than inspecting the source line at instrument time.
+fn establishes_principal(matched_fn_name: &str) -> bool {
+    let short = matched_fn_name
+        .rsplit("::")
+        .next()
+        .unwrap_or(matched_fn_name);
+    let credential_check = short == "verify_password"       // argon2 PasswordVerifier
+        || matched_fn_name.starts_with("bcrypt::verify");   // bcrypt::verify
+    !credential_check
+}
+
 /// Adapter between this prototype and our existing ll_parser + nested taint analysis.
 ///
 /// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
@@ -133,13 +151,22 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
 
     use ll_parser::taint_analysis::SemanticPointKind;
     let mut sites: Vec<InstrumentSite> = Vec::new();
-    let (mut n_auth, mut n_access) = (0usize, 0usize);
+    let (mut n_auth, mut n_access, mut n_credential) = (0usize, 0usize, 0usize);
 
     // 1) Auth sites at access-control points; 2) Access sites at LLM calls.
     for point in engine.semantic_points.iter() {
         match &point.kind {
             SemanticPointKind::AccessControl { .. }
             | SemanticPointKind::AccessControlRecovery { .. } => {
+                let matched = &point.security_point.matched_fn_name;
+                // Only principal-establishing auth points get an afg_auth! site.
+                // Credential checks (argon2/bcrypt password verifiers) authenticate
+                // but do not name the user, so the principal is established at a
+                // separate token / session / identity point.
+                if !establishes_principal(matched) {
+                    n_credential += 1;
+                    continue;
+                }
                 // Location = the auth call site (its result node); the instrumenter
                 // extracts the call's first argument as the runtime principal.
                 let node = point.result_node.or_else(|| point.argument_nodes.first().copied());
@@ -147,7 +174,6 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                 let Some((file, line)) = node_loc(&engine, node) else {
                     continue;
                 };
-                let matched = &point.security_point.matched_fn_name;
                 let call_name = matched.rsplit("::").next().unwrap_or(matched).to_string();
                 sites.push(InstrumentSite {
                     file: file.into(),
@@ -218,7 +244,7 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     }
 
     println!(
-        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {} total",
+        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {} total ({n_credential} credential-check point(s) skipped)",
         sites.len()
     );
     Ok(StaticStageResult {
@@ -323,4 +349,24 @@ fn main() -> Result<()> {
 
     println!("AFG pipeline completed: {}", cli.run_dir.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::establishes_principal;
+
+    #[test]
+    fn credential_checks_are_not_principal_sources() {
+        // Password / secret verifiers: authenticate, but do not name the user.
+        assert!(!establishes_principal("argon2::PasswordVerifier::verify_password"));
+        assert!(!establishes_principal("bcrypt::verify"));
+    }
+
+    #[test]
+    fn token_and_identity_points_are_principal_sources() {
+        // Token / session / identity points: their first argument names the user.
+        assert!(establishes_principal("jsonwebtoken::decode"));
+        assert!(establishes_principal("actix_identity::Identity::id"));
+        assert!(establishes_principal("ldap3::Ldap::simple_bind"));
+    }
 }

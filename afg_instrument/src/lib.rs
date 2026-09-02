@@ -117,11 +117,11 @@ pub fn instrument_project(
                     inserts.push((idx, injected));
                 }
                 SiteAction::Auth { call_name } => {
-                    // The runtime principal is the auth call's first argument. Only
-                    // inject when that argument is a string-like identity (a token or
-                    // username). Auth APIs whose first argument is not the principal,
-                    // such as argon2 and bcrypt which take the password bytes, are
-                    // skipped here and left to a token or identity auth point.
+                    // The runtime principal is the auth call's first argument. The
+                    // producer already classifies which auth points establish a
+                    // principal (credential checks like argon2/bcrypt get no Auth
+                    // site), so this is a backstop: only inject when the first
+                    // argument is a string-like identity, and skip anything else.
                     match extract_first_arg(&lines[site.line - 1], call_name) {
                         Some(principal) if looks_like_string_principal(&principal) => {
                             let injected = format!(
