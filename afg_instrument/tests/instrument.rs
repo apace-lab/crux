@@ -128,3 +128,41 @@ fn inserts_afg_auth_at_auth_site() {
         "afg_auth! not inserted with extracted principal:\n{code}"
     );
 }
+
+#[test]
+fn skips_afg_auth_for_byte_principal() {
+    let src = fresh("afg_instr_src4");
+    let dst = fresh("afg_instr_dst4");
+    // fixture whose auth call takes password bytes first (argon2/bcrypt shape):
+    // the principal is not a string, so no afg_auth! should be injected here.
+    fs::create_dir_all(src.join("src")).unwrap();
+    fs::write(
+        src.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("src/main.rs"),
+        "fn main() {\n    let ok = verify_password(password.as_bytes(), &parsed);\n}\n",
+    )
+    .unwrap();
+
+    let plan = InstrumentationPlan {
+        sites: vec![InstrumentSite {
+            file: "src/main.rs".into(),
+            line: 2,
+            action: SiteAction::Auth {
+                call_name: "verify_password".into(),
+            },
+            reason: "auth point".into(),
+        }],
+    };
+
+    instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
+
+    let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
+    assert!(
+        !code.contains("afg_auth!"),
+        "afg_auth! should be skipped for a byte-slice (password) first argument:\n{code}"
+    );
+}

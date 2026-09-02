@@ -117,12 +117,27 @@ pub fn instrument_project(
                     inserts.push((idx, injected));
                 }
                 SiteAction::Auth { call_name } => {
-                    let principal = extract_first_arg(&lines[site.line - 1], call_name)
-                        .unwrap_or_else(|| "\"unknown\"".to_string());
-                    let injected = format!(
-                        "afg_runtime::afg_auth!(principal = {principal}, method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
-                    );
-                    inserts.push((site.line - 1, injected));
+                    // The runtime principal is the auth call's first argument. Only
+                    // inject when that argument is a string-like identity (a token or
+                    // username). Auth APIs whose first argument is not the principal,
+                    // such as argon2 and bcrypt which take the password bytes, are
+                    // skipped here and left to a token or identity auth point.
+                    match extract_first_arg(&lines[site.line - 1], call_name) {
+                        Some(principal) if looks_like_string_principal(&principal) => {
+                            let injected = format!(
+                                "afg_runtime::afg_auth!(principal = {principal}, method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
+                            );
+                            inserts.push((site.line - 1, injected));
+                        }
+                        other => {
+                            eprintln!(
+                                "[instrument] note: skipping afg_auth! at {}:{} ({call_name}): first argument {:?} is not a string principal",
+                                path.display(),
+                                site.line,
+                                other.as_deref().unwrap_or("<none>")
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -148,6 +163,17 @@ fn find_call_line(lines: &[String], start: usize, call_name: &str) -> Option<usi
         .skip(start)
         .find(|(_, l)| l.contains(&pat))
         .map(|(i, _)| i)
+}
+
+/// Whether an extracted first argument looks like a string principal (a token or
+/// username) rather than, e.g., the password bytes passed to argon2/bcrypt.
+fn looks_like_string_principal(arg: &str) -> bool {
+    let a = arg.trim();
+    if a.is_empty() {
+        return false;
+    }
+    // Byte-typed arguments (password material) are never the principal.
+    !(a.contains(".as_bytes(") || a.starts_with("b\"") || a.starts_with("&["))
 }
 
 /// Extract the first argument expression of a call to `call_name` from a source
