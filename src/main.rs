@@ -32,7 +32,7 @@ struct Cli {
     ac: PathBuf,
 
     /// Path to the afg-runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "../afg_observer/afg-runtime")]
+    #[arg(long, default_value = "afg-runtime")]
     afg_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]

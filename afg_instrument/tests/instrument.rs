@@ -20,7 +20,7 @@ fn write_fixture(dir: &PathBuf) {
 }
 
 fn runtime_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../afg_observer/afg-runtime")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../afg-runtime")
 }
 
 #[test]
