@@ -63,13 +63,15 @@ pub fn instrument_project(
     }
     copy_tree(src, dst)?;
 
-    // Make the afg runtime macros available in the instrumented app.
-    ensure_runtime_dependency(dst, runtime_crate_path)?;
-
     let mut by_file: HashMap<PathBuf, Vec<&InstrumentSite>> = HashMap::new();
     for site in &plan.sites {
         by_file.entry(site.file.clone()).or_default().push(site);
     }
+
+    // Crates we actually rewrite; the afg-runtime dep is added to each of these (a
+    // real app can be a cargo workspace, so the dep must go in each member crate,
+    // not the workspace root).
+    let mut runtime_manifests: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for (rel, sites) in by_file {
         let path = match resolve_target_file(dst, &rel) {
@@ -83,6 +85,10 @@ pub fn instrument_project(
                 continue;
             }
         };
+
+        if let Some(manifest) = nearest_crate_manifest(&path, dst) {
+            runtime_manifests.insert(manifest);
+        }
 
         let text = fs::read_to_string(&path)?;
         let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
@@ -165,7 +171,38 @@ pub fn instrument_project(
         fs::write(path, lines.join("\n") + "\n")?;
     }
 
+    // Make the afg-runtime macros available in every crate we rewrote. Fall back
+    // to the project root for a single-crate app (no member crate was recorded).
+    if runtime_manifests.is_empty() {
+        ensure_runtime_dependency(&dst.join("Cargo.toml"), runtime_crate_path)?;
+    } else {
+        for manifest in &runtime_manifests {
+            ensure_runtime_dependency(manifest, runtime_crate_path)?;
+        }
+    }
+
     Ok(())
+}
+
+/// Walk up from `file` to `root`, returning the nearest Cargo.toml that defines a
+/// package (`[package]`) -- the crate that owns this file, not a workspace root.
+fn nearest_crate_manifest(file: &Path, root: &Path) -> Option<PathBuf> {
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        let manifest = d.join("Cargo.toml");
+        if manifest.exists() {
+            if let Ok(text) = fs::read_to_string(&manifest) {
+                if text.contains("[package]") {
+                    return Some(manifest);
+                }
+            }
+        }
+        if d == root {
+            break;
+        }
+        dir = d.parent();
+    }
+    None
 }
 
 /// Index of the first line at/after `start` containing a call `call_name(`.
@@ -225,9 +262,8 @@ fn extract_first_arg(line: &str, call_name: &str) -> Option<String> {
 
 /// Append an `afg-runtime` path dependency to the instrumented app's Cargo.toml
 /// (idempotent), so the injected macros resolve.
-fn ensure_runtime_dependency(dst: &Path, runtime_crate_path: &Path) -> Result<()> {
-    let manifest = dst.join("Cargo.toml");
-    let mut text = fs::read_to_string(&manifest).with_context(|| {
+fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Result<()> {
+    let mut text = fs::read_to_string(manifest).with_context(|| {
         format!("instrumented app has no Cargo.toml at {}", manifest.display())
     })?;
     if text.contains("afg-runtime") {
