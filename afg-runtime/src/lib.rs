@@ -107,6 +107,14 @@ pub enum Event {
         file: &'static str,
         line: u32,
     },
+    /// Optional, app-reported domain-level leak (the current principal was served
+    /// `owner`'s data). Not derivable from the trace itself, so an app records it
+    /// explicitly via `afg_leak!`; the dashboard shows it when present.
+    Leak {
+        principal: Option<String>,
+        owner: String,
+        detail: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -186,6 +194,18 @@ pub fn access(
         function_id,
         file,
         line,
+    });
+}
+
+/// Record an optional, app-reported domain-level leak: the current principal was
+/// served `owner`'s data. Purely additive -- apps that don't call this simply
+/// produce no Leak events, and the dashboard falls back to AFG-derived findings.
+pub fn leak(owner: impl Into<String>, detail: impl Into<String>) {
+    let ctx = current_context();
+    record(Event::Leak {
+        principal: ctx.principal,
+        owner: owner.into(),
+        detail: detail.into(),
     });
 }
 
@@ -357,6 +377,15 @@ macro_rules! afg_access {
 macro_rules! afg_schedule_point {
     (site = $site:expr $(,)?) => {{
         $crate::schedule_point($site, file!(), line!())
+    }};
+}
+
+/// Optional: record an app-reported domain leak into the trace so the dashboard
+/// can show it. Apps that don't use it lose nothing (AFG-derived findings apply).
+#[macro_export]
+macro_rules! afg_leak {
+    (owner = $owner:expr, detail = $detail:expr $(,)?) => {{
+        $crate::leak($owner, $detail);
     }};
 }
 

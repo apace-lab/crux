@@ -80,7 +80,7 @@ fn hash_fn_id(name: &str) -> u64 {
 }
 
 /// Project-relative source location of a PANode, if it has debug info.
-fn node_loc(engine: &ll_parser::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
+fn node_loc(engine: &rail_rs::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
     let node = engine.nodes.get(&node_id)?;
     let loc = node.source_loc.as_ref()?;
     let file = loc.file.clone()?;
@@ -111,7 +111,7 @@ fn establishes_principal(matched_fn_name: &str) -> bool {
     !credential_check
 }
 
-/// Adapter between this prototype and our existing ll_parser + nested taint analysis.
+/// Adapter between this prototype and our existing rail-rs + nested taint analysis.
 ///
 /// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
 /// `InstrumentationPlan`: `Auth` sites at access-control points (so the runtime
@@ -127,16 +127,16 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     let mut modules = Vec::with_capacity(llvm_ir.len());
     for path in llvm_ir {
         println!("      LLVM IR: {}", path.display());
-        let module = ll_parser::llvm_ir::Module::from_ir_path(path)
+        let module = rail_rs::llvm_ir::Module::from_ir_path(path)
             .map_err(|e| anyhow::anyhow!("failed to parse LLVM IR {}: {e}", path.display()))?;
         modules.push(module);
     }
-    let mut analysis = ll_parser::CrossModuleAnalysis::new(modules.iter());
+    let mut analysis = rail_rs::CrossModuleAnalysis::new(modules.iter());
 
     // Load the signature catalogs so the PAG records semantic (LLM/AC) points.
-    let llm_sigs = ll_parser::signature::load_signatures(llm_api)
+    let llm_sigs = rail_rs::signature::load_signatures(llm_api)
         .map_err(|e| anyhow::anyhow!("failed to load LLM catalog {}: {e}", llm_api.display()))?;
-    let ac_sigs = ll_parser::signature::load_signatures(ac)
+    let ac_sigs = rail_rs::signature::load_signatures(ac)
         .map_err(|e| anyhow::anyhow!("failed to load AC catalog {}: {e}", ac.display()))?;
     println!(
         "      catalogs: {} LLM, {} AC signatures",
@@ -155,7 +155,7 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
         engine.node_contexts.len()
     );
 
-    use ll_parser::taint_analysis::SemanticPointKind;
+    use rail_rs::taint_analysis::SemanticPointKind;
     let mut sites: Vec<InstrumentSite> = Vec::new();
     let (mut n_auth, mut n_access, mut n_credential) = (0usize, 0usize, 0usize);
 
@@ -229,7 +229,7 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
         let principals: HashSet<usize> = ctxs
             .iter()
             .filter_map(|e| match e {
-                ll_parser::PAContextElem::Principal { auth_callsite } => Some(*auth_callsite),
+                rail_rs::PAContextElem::Principal { auth_callsite } => Some(*auth_callsite),
                 _ => None,
             })
             .collect();
