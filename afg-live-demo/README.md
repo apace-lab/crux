@@ -22,6 +22,12 @@ marking your app's own shared resources is the developer's job. This is what mak
 the leak show up as a real node overlap: alice **writes** the cache node, bob
 **reads** it.
 
+## Config it
+1. replace the export command `export LLVM_SYS_191_PREFIX` in `afg_prototype/afg-live-demo/Cargo.toml` to your path of llvm-19, e.g., `export LLVM_SYS_191_PREFIX=/usr/lib/llvm-19` in Ubuntu
+
+2. replace the absolute paths in `afg-live-demo/Cargo.toml` to your absolute paths of `afg-runtime`, `afg_observ` and `afg_scheduler` (we will make this automated later)
+
+
 ## Run it
 
 ```bash
@@ -111,3 +117,7 @@ the leak can be replayed; restart the server for a clean trace.
 - Deterministic schedule *replay* is a MadSim feature; this live server runs on
   real tokio and only does observation + detection (its cache leak is
   order-independent, so replay is not needed to reproduce it).
+
+
+ 
+
