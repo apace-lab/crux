@@ -10,7 +10,7 @@ use afg_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
 use afg_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
-use afg_scheduler::{generate_schedules, write_schedule};
+use afg_scheduler::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
 
 #[derive(Parser, Debug)]
 #[command(name = "afg")]
@@ -346,14 +346,16 @@ fn main() -> Result<()> {
 
     println!("[6/6] Replay");
     if cli.replay {
+        let mut reproduced = 0usize;
         for i in 0..schedules.len() {
+            let replay_trace = cli
+                .run_dir
+                .join("result")
+                .join(format!("replay-{i:03}.jsonl"));
             run_observation(&ObservationConfig {
                 project_dir: instrumented_project.clone(),
                 seed: cli.seed_start,
-                trace_path: cli
-                    .run_dir
-                    .join("result")
-                    .join(format!("replay-{i:03}.jsonl")),
+                trace_path: replay_trace.clone(),
                 schedule_path: Some(
                     cli.run_dir
                         .join("schedule")
@@ -361,7 +363,32 @@ fn main() -> Result<()> {
                 ),
                 cargo_args: vec![cli.cargo_cmd.clone()],
             })?;
+
+            // Verdict: did the scheduled writer-then-reader leak actually occur?
+            let replay_obs = analyze_traces(&[replay_trace])?;
+            let verdict = verify_replay(&schedules[i], &replay_obs);
+            fs::write(
+                cli.run_dir
+                    .join("result")
+                    .join(format!("verdict-{i:03}.json")),
+                serde_json::to_string_pretty(&verdict)?,
+            )?;
+            match &verdict {
+                LeakVerdict::Reproduced { writer, reader, panode } => {
+                    reproduced += 1;
+                    println!(
+                        "      schedule {i:03}: LEAK REPRODUCED ({writer} wrote PANode {panode}, then {reader} read it)"
+                    );
+                }
+                LeakVerdict::NotReproduced { reason } => {
+                    println!("      schedule {i:03}: not reproduced ({reason})");
+                }
+            }
         }
+        println!(
+            "      replay verdict: {reproduced}/{} schedule(s) reproduced a cross-user leak",
+            schedules.len()
+        );
     } else {
         println!("      replay disabled; add --replay to execute generated schedules");
     }
