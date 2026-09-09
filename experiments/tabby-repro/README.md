@@ -29,20 +29,20 @@ Bundled in this kit: the two-user harness, the scripts, and the captured
 `results/`. NOT bundled (referenced by path, so you provide them):
 
 - the **tabby** source tree (~9 GB) at `$TABBY`,
-- the **AFG** repo (producer + rail-rs/ll_parser + catalogs) at `$AFG_ROOT`,
+- the **AFG** repo (producer + rail-rs + catalogs) at `$AFG_ROOT`,
 - the built **`afg`** binary.
 
 Paths are absolute and configurable; the kit does NOT require tabby and AFG to be
 siblings. The only two knobs that matter are `$AFG_ROOT` and `$TABBY` (see
 `scripts/config.sh`); `03_dynamic.sh` rewrites the harness's afg-runtime path from
 `$AFG_ROOT` automatically. Note that AFG's own internal layout is unchanged:
-`afg_prototype` still path-depends on `../ll_parser` (rail-rs), so those stay
+`afg_prototype` still path-depends on `../rail-rs`, so those stay
 siblings inside the AFG repo as they already are.
 
 ## Prerequisites
 
 - **This AFG checkout**, with the data-access catalog integration and the
-  `AFG_APP_CRATE` override present (both are in `ll_parser` + `afg_prototype`).
+  `AFG_APP_CRATE` override present (both are in `rail-rs` + `afg_prototype`).
   Build the producer once:
   ```sh
   cd ../..                      # $AFG_ROOT/afg_prototype

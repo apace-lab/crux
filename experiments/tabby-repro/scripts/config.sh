@@ -11,6 +11,6 @@ KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KIT
 export OUT="$KIT/out"
 export AFG_BIN="$AFG_ROOT/afg_prototype/target/debug/afg"
-export SIGS="$AFG_ROOT/ll_parser/signatures"
+export SIGS="$AFG_ROOT/rail-rs/signatures"
 export DASH="$AFG_ROOT/afg_prototype/afg-dashboard"
 mkdir -p "$OUT"
