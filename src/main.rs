@@ -24,15 +24,15 @@ struct Cli {
     llvm_ir: Vec<PathBuf>,
 
     /// LLM API signature catalog (JSON)
-    #[arg(long, default_value = "../ll_parser/signatures/llm_api_functions.json")]
+    #[arg(long, default_value = "../rail-rs/signatures/llm_api_functions.json")]
     llm_api: PathBuf,
 
     /// Access-control signature catalog (JSON)
-    #[arg(long, default_value = "../ll_parser/signatures/ac_functions.json")]
+    #[arg(long, default_value = "../rail-rs/signatures/ac_functions.json")]
     ac: PathBuf,
 
     /// Data-store (database / cache) signature catalog (JSON)
-    #[arg(long, default_value = "../ll_parser/signatures/data_access_functions.json")]
+    #[arg(long, default_value = "../rail-rs/signatures/data_access_functions.json")]
     data_access: PathBuf,
 
     /// Path to the afg-runtime crate, added as a dependency to the instrumented app

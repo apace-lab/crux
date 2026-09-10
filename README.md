@@ -4,7 +4,7 @@ Expected project structure:
 
 ```text
 parent/
-├── ll-parser/
+├── rail-rs/
 │   └── src/
 │       └── taint_analysis.rs
 └── afg/
@@ -18,16 +18,16 @@ parent/
 `afg/Cargo.toml` uses:
 
 ```toml
-ll_parser = { path = "../ll-parser" }
+rail-rs = { path = "../rail-rs" }
 ```
 
-This project uses (ll-parser)[https://github.com/apace-lab/ll_parser.git] as dependency for static taint analysis, where the `taint_analysis` module generates the taint results from running pointer analysis by `ll-parser`.
+This project uses (rail-rs)[https://github.com/apace-lab/ll_parser.git] as dependency for static taint analysis, where the `taint_analysis` module generates the taint results from running pointer analysis by `rail-rs`.
 
 ## Pipeline
 
 ```text
 LLVM IR
-  -> ll_parser PAG
+  -> rail-rs PAG
     -> run taint analysis together
   -> afg_instrument
     -> create InstrumentationPlan
@@ -44,9 +44,9 @@ LLVM IR
 
 Edit only `run_pag_and_afg()` in `src/main.rs`.
 
-Replace the placeholder plan with our APIs, e.g., the `main.rs` in `ll_parser`:
+Replace the placeholder plan with our APIs, e.g., the `main.rs` in `rail-rs`:
 
-The prototype intentionally does not invent public API names from our code in `ll_parser`.
+The prototype intentionally does not invent public API names from our code in `rail-rs`.
 
 ## Build
 

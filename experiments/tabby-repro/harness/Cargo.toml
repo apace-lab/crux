@@ -1,0 +1,15 @@
+# Harness that drives tabby's real tabby-db code as two users. It is copied into
+# the tabby workspace as a member by scripts/03_dynamic.sh (tabby-db uses
+# `version.workspace = true`, so the harness must build inside that workspace).
+#
+# The tabby-db path is relative to tabby/afg_tabby_harness/ (where it is copied).
+# The afg-runtime path is absolute; adjust if AFG_ROOT differs from the default.
+[package]
+name = "afg_tabby_harness"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tabby-db = { path = "../ee/tabby-db", features = ["testutils"] }
+afg-runtime = { path = "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/afg-runtime" }
