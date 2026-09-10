@@ -10,7 +10,7 @@ use afg_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
 use afg_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
-use afg_scheduler::{generate_schedules, write_schedule};
+use afg_scheduler::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
 
 #[derive(Parser, Debug)]
 #[command(name = "afg")]
@@ -30,6 +30,10 @@ struct Cli {
     /// Access-control signature catalog (JSON)
     #[arg(long, default_value = "../ll_parser/signatures/ac_functions.json")]
     ac: PathBuf,
+
+    /// Data-store (database / cache) signature catalog (JSON)
+    #[arg(long, default_value = "../ll_parser/signatures/data_access_functions.json")]
+    data_access: PathBuf,
 
     /// Path to the afg-runtime crate, added as a dependency to the instrumented app
     #[arg(long, default_value = "afg-runtime")]
@@ -80,7 +84,7 @@ fn hash_fn_id(name: &str) -> u64 {
 }
 
 /// Project-relative source location of a PANode, if it has debug info.
-fn node_loc(engine: &ll_parser::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
+fn node_loc(engine: &rail_rs::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
     let node = engine.nodes.get(&node_id)?;
     let loc = node.source_loc.as_ref()?;
     let file = loc.file.clone()?;
@@ -111,14 +115,30 @@ fn establishes_principal(matched_fn_name: &str) -> bool {
     !credential_check
 }
 
-/// Adapter between this prototype and our existing ll_parser + nested taint analysis.
+/// Direction of a shared data-store access, from the catalog category. A
+/// "data-write" puts data into the store; anything else (a read/query) reads it
+/// out, which is the leak-exposing direction.
+fn data_access_kind(category: &str) -> AccessKind {
+    if category == "data-write" {
+        AccessKind::Write
+    } else {
+        AccessKind::Read
+    }
+}
+
+/// Adapter between this prototype and our existing rail-rs + nested taint analysis.
 ///
 /// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
 /// `InstrumentationPlan`: `Auth` sites at access-control points (so the runtime
 /// per-user principal is established) and `Access` sites at LLM calls and any
 /// statically-detected cross-user overlaps. The dynamic stages then distinguish
 /// users at runtime.
-fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<StaticStageResult> {
+fn run_pag_and_afg(
+    llvm_ir: &[PathBuf],
+    llm_api: &Path,
+    ac: &Path,
+    data_access: &Path,
+) -> Result<StaticStageResult> {
     use std::collections::HashSet;
 
     println!("[1/6] PAG + AFG static analysis");
@@ -127,23 +147,27 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     let mut modules = Vec::with_capacity(llvm_ir.len());
     for path in llvm_ir {
         println!("      LLVM IR: {}", path.display());
-        let module = ll_parser::llvm_ir::Module::from_ir_path(path)
+        let module = rail_rs::llvm_ir::Module::from_ir_path(path)
             .map_err(|e| anyhow::anyhow!("failed to parse LLVM IR {}: {e}", path.display()))?;
         modules.push(module);
     }
-    let mut analysis = ll_parser::CrossModuleAnalysis::new(modules.iter());
+    let mut analysis = rail_rs::CrossModuleAnalysis::new(modules.iter());
 
-    // Load the signature catalogs so the PAG records semantic (LLM/AC) points.
-    let llm_sigs = ll_parser::signature::load_signatures(llm_api)
+    // Load the signature catalogs so the PAG records semantic (LLM/AC/data) points.
+    let llm_sigs = rail_rs::signature::load_signatures(llm_api)
         .map_err(|e| anyhow::anyhow!("failed to load LLM catalog {}: {e}", llm_api.display()))?;
-    let ac_sigs = ll_parser::signature::load_signatures(ac)
+    let ac_sigs = rail_rs::signature::load_signatures(ac)
         .map_err(|e| anyhow::anyhow!("failed to load AC catalog {}: {e}", ac.display()))?;
+    let data_sigs = rail_rs::signature::load_signatures(data_access).map_err(|e| {
+        anyhow::anyhow!("failed to load data-store catalog {}: {e}", data_access.display())
+    })?;
     println!(
-        "      catalogs: {} LLM, {} AC signatures",
+        "      catalogs: {} LLM, {} AC, {} data-store signatures",
         llm_sigs.len(),
-        ac_sigs.len()
+        ac_sigs.len(),
+        data_sigs.len()
     );
-    analysis.set_context_catalogs(llm_sigs, ac_sigs);
+    analysis.set_context_catalogs(llm_sigs, ac_sigs, data_sigs);
 
     // Build the PAG (afg mode) and run the taint analysis.
     let engine = analysis.taint_analysis("afg", None);
@@ -155,9 +179,9 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
         engine.node_contexts.len()
     );
 
-    use ll_parser::taint_analysis::SemanticPointKind;
+    use rail_rs::taint_analysis::SemanticPointKind;
     let mut sites: Vec<InstrumentSite> = Vec::new();
-    let (mut n_auth, mut n_access, mut n_credential) = (0usize, 0usize, 0usize);
+    let (mut n_auth, mut n_access, mut n_credential, mut n_data) = (0usize, 0usize, 0usize, 0usize);
 
     // 1) Auth sites at access-control points; 2) Access sites at LLM calls.
     for point in engine.semantic_points.iter() {
@@ -219,6 +243,35 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
                 });
                 n_access += 1;
             }
+            SemanticPointKind::DataAccess { category } => {
+                // A shared data-store read/write. Direction comes from the catalog
+                // category; a read exposes stored data, a write puts data in.
+                let access = data_access_kind(category);
+                let node = point.result_node.or_else(|| point.argument_nodes.first().copied());
+                let Some(node) = node else { continue };
+                let loc = node_loc(&engine, node).or_else(|| {
+                    point.argument_nodes.iter().find_map(|n| node_loc(&engine, *n))
+                });
+                let Some((file, line)) = loc else { continue };
+                let matched = &point.security_point.matched_fn_name;
+                let short = matched.rsplit("::").next().unwrap_or(matched).to_string();
+                let function_id = engine.nodes.get(&node).and_then(|n| n.function()).map(hash_fn_id);
+                sites.push(InstrumentSite {
+                    file: file.into(),
+                    line,
+                    action: SiteAction::Access {
+                        panode: node as u64,
+                        function_id,
+                        access,
+                        call_name: Some(short),
+                        // gate it so a replay schedule can order a write before a
+                        // cross-user read (data-store calls are usually async).
+                        schedule_site: Some(node as u64),
+                    },
+                    reason: format!("data access ({category}): {}", point.callee.as_deref().unwrap_or("?")),
+                });
+                n_data += 1;
+            }
             _ => {}
         }
     }
@@ -229,7 +282,7 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
         let principals: HashSet<usize> = ctxs
             .iter()
             .filter_map(|e| match e {
-                ll_parser::PAContextElem::Principal { auth_callsite } => Some(*auth_callsite),
+                rail_rs::PAContextElem::Principal { auth_callsite } => Some(*auth_callsite),
                 _ => None,
             })
             .collect();
@@ -255,7 +308,7 @@ fn run_pag_and_afg(llvm_ir: &[PathBuf], llm_api: &Path, ac: &Path) -> Result<Sta
     }
 
     println!(
-        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {} total ({n_credential} credential-check point(s) skipped)",
+        "      instrumentation sites: {n_auth} auth, {n_access} llm-access, {n_data} data-access, {} total ({n_credential} credential-check point(s) skipped)",
         sites.len()
     );
     Ok(StaticStageResult {
@@ -274,7 +327,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     prepare_run_dir(&cli.run_dir)?;
 
-    let static_result = run_pag_and_afg(&cli.llvm_ir, &cli.llm_api, &cli.ac)?;
+    let static_result = run_pag_and_afg(&cli.llvm_ir, &cli.llm_api, &cli.ac, &cli.data_access)?;
     fs::write(
         cli.run_dir.join("static/instrumentation.json"),
         serde_json::to_string_pretty(&static_result.instrumentation_plan)?,
@@ -346,14 +399,16 @@ fn main() -> Result<()> {
 
     println!("[6/6] Replay");
     if cli.replay {
+        let mut reproduced = 0usize;
         for i in 0..schedules.len() {
+            let replay_trace = cli
+                .run_dir
+                .join("result")
+                .join(format!("replay-{i:03}.jsonl"));
             run_observation(&ObservationConfig {
                 project_dir: instrumented_project.clone(),
                 seed: cli.seed_start,
-                trace_path: cli
-                    .run_dir
-                    .join("result")
-                    .join(format!("replay-{i:03}.jsonl")),
+                trace_path: replay_trace.clone(),
                 schedule_path: Some(
                     cli.run_dir
                         .join("schedule")
@@ -361,7 +416,32 @@ fn main() -> Result<()> {
                 ),
                 cargo_args: vec![cli.cargo_cmd.clone()],
             })?;
+
+            // Verdict: did the scheduled writer-then-reader leak actually occur?
+            let replay_obs = analyze_traces(&[replay_trace])?;
+            let verdict = verify_replay(&schedules[i], &replay_obs);
+            fs::write(
+                cli.run_dir
+                    .join("result")
+                    .join(format!("verdict-{i:03}.json")),
+                serde_json::to_string_pretty(&verdict)?,
+            )?;
+            match &verdict {
+                LeakVerdict::Reproduced { writer, reader, panode } => {
+                    reproduced += 1;
+                    println!(
+                        "      schedule {i:03}: LEAK REPRODUCED ({writer} wrote PANode {panode}, then {reader} read it)"
+                    );
+                }
+                LeakVerdict::NotReproduced { reason } => {
+                    println!("      schedule {i:03}: not reproduced ({reason})");
+                }
+            }
         }
+        println!(
+            "      replay verdict: {reproduced}/{} schedule(s) reproduced a cross-user leak",
+            schedules.len()
+        );
     } else {
         println!("      replay disabled; add --replay to execute generated schedules");
     }
@@ -372,7 +452,17 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::establishes_principal;
+    use super::{data_access_kind, establishes_principal};
+    use afg_instrument::AccessKind;
+
+    #[test]
+    fn data_access_direction_from_category() {
+        // A write puts data into the shared store; a read exposes it (the leak
+        // direction). Unknown/generic categories are treated as reads.
+        assert_eq!(data_access_kind("data-write"), AccessKind::Write);
+        assert_eq!(data_access_kind("data-read"), AccessKind::Read);
+        assert_eq!(data_access_kind("data-access"), AccessKind::Read);
+    }
 
     #[test]
     fn credential_checks_are_not_principal_sources() {

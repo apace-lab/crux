@@ -107,6 +107,14 @@ pub enum Event {
         file: &'static str,
         line: u32,
     },
+    /// Optional, app-reported domain-level leak (the current principal was served
+    /// `owner`'s data). Not derivable from the trace itself, so an app records it
+    /// explicitly via `afg_leak!`; the dashboard shows it when present.
+    Leak {
+        principal: Option<String>,
+        owner: String,
+        detail: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -189,6 +197,18 @@ pub fn access(
     });
 }
 
+/// Record an optional, app-reported domain-level leak: the current principal was
+/// served `owner`'s data. Purely additive -- apps that don't call this simply
+/// produce no Leak events, and the dashboard falls back to AFG-derived findings.
+pub fn leak(owner: impl Into<String>, detail: impl Into<String>) {
+    let ctx = current_context();
+    record(Event::Leak {
+        principal: ctx.principal,
+        owner: owner.into(),
+        detail: detail.into(),
+    });
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduleStep {
     pub principal: String,
@@ -214,6 +234,55 @@ fn schedule_state() -> &'static Mutex<ScheduleState> {
     })
 }
 
+/// Name of the artificial second user the scheduler synthesizes for single-user
+/// apps. Must match `afg_scheduler::SYNTHETIC_PRINCIPAL`.
+pub const SYNTHETIC_PRINCIPAL: &str = "afg-synthetic";
+
+/// Whether the loaded replay schedule includes `principal` as a step. An app can
+/// use this to inject a synthetic second user ONLY during a synthetic replay:
+/// the schedule is empty during observation (so this is false then), and carries
+/// the synthesized `afg-synthetic` steps during the replay that tests the leak.
+pub fn schedule_contains_principal(principal: &str) -> bool {
+    schedule_state()
+        .lock()
+        .expect("AFG schedule lock poisoned")
+        .steps
+        .iter()
+        .any(|s| s.principal == principal)
+}
+
+/// Pure gate decision for one `schedule_point` hit.
+/// `Some(true)`  = it's this step's turn (caller should advance `current`);
+/// `Some(false)` = proceed without gating (schedule exhausted, unauthenticated,
+///                 or this `(principal, site)` isn't part of the schedule);
+/// `None`        = must wait (it's in the schedule but not yet this turn).
+fn gate_check(
+    steps: &[ScheduleStep],
+    current: usize,
+    principal: Option<&str>,
+    site: PACallSiteID,
+) -> Option<bool> {
+    if current >= steps.len() {
+        return Some(false);
+    }
+    let Some(p) = principal else {
+        // Unauthenticated/background work is not gated.
+        return Some(false);
+    };
+    // If this schedule never mentions this (principal, site), don't gate it,
+    // otherwise a schedule for one node would block on another node's gates.
+    let in_schedule = steps.iter().any(|s| s.principal == p && s.site == site);
+    if !in_schedule {
+        return Some(false);
+    }
+    let expected = &steps[current];
+    if expected.principal == p && expected.site == site {
+        Some(true)
+    } else {
+        None
+    }
+}
+
 pub async fn schedule_point(site: PACallSiteID, file: &'static str, line: u32) {
     let ctx = current_context();
     let principal = ctx.principal.clone();
@@ -235,30 +304,36 @@ pub async fn schedule_point(site: PACallSiteID, file: &'static str, line: u32) {
         return;
     }
 
+    // Bounded cooperative gate: if it isn't this step's turn we yield and retry,
+    // but only up to a cap, so a divergent replay (a scheduled step that never
+    // arrives) can't hang the run forever.
+    let max_spins: u64 = env::var("AFG_SCHEDULE_MAX_SPINS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000);
+    let mut spins = 0u64;
     loop {
         let allowed = {
             let mut state = schedule_state().lock().expect("AFG schedule lock poisoned");
-
-            if state.current >= state.steps.len() {
-                true
-            } else if let Some(ref p) = principal {
-                let expected = &state.steps[state.current];
-                if expected.principal == *p && expected.site == site {
+            match gate_check(&state.steps, state.current, principal.as_deref(), site) {
+                Some(true) => {
                     state.current += 1;
                     true
-                } else {
-                    false
                 }
-            } else {
-                // Unauthenticated/background work is not gated by principal schedules.
-                true
+                Some(false) => true,
+                None => false,
             }
         };
-
         if allowed {
             return;
         }
-
+        spins += 1;
+        if spins >= max_spins {
+            eprintln!(
+                "[afg-runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
+            );
+            return;
+        }
         // Cooperative gate: MadSim remains the actual executor/scheduler.
         tokio::task::yield_now().await;
     }
@@ -303,4 +378,54 @@ macro_rules! afg_schedule_point {
     (site = $site:expr $(,)?) => {{
         $crate::schedule_point($site, file!(), line!())
     }};
+}
+
+/// Optional: record an app-reported domain leak into the trace so the dashboard
+/// can show it. Apps that don't use it lose nothing (AFG-derived findings apply).
+#[macro_export]
+macro_rules! afg_leak {
+    (owner = $owner:expr, detail = $detail:expr $(,)?) => {{
+        $crate::leak($owner, $detail);
+    }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gate_check, ScheduleStep};
+
+    fn steps() -> Vec<ScheduleStep> {
+        vec![
+            ScheduleStep { principal: "alice".into(), site: 1 },
+            ScheduleStep { principal: "bob".into(), site: 1 },
+        ]
+    }
+
+    #[test]
+    fn our_turn_advances() {
+        assert_eq!(gate_check(&steps(), 0, Some("alice"), 1), Some(true));
+        assert_eq!(gate_check(&steps(), 1, Some("bob"), 1), Some(true));
+    }
+
+    #[test]
+    fn wrong_turn_but_in_schedule_waits() {
+        // bob is in the schedule (step 1) but it's alice's turn (step 0) -> wait
+        assert_eq!(gate_check(&steps(), 0, Some("bob"), 1), None);
+    }
+
+    #[test]
+    fn exhausted_schedule_proceeds() {
+        assert_eq!(gate_check(&steps(), 2, Some("alice"), 1), Some(false));
+    }
+
+    #[test]
+    fn unauthenticated_is_not_gated() {
+        assert_eq!(gate_check(&steps(), 0, None, 1), Some(false));
+    }
+
+    #[test]
+    fn site_or_principal_not_in_schedule_proceeds() {
+        // a gated site this schedule doesn't own (deadlock-robustness): proceed
+        assert_eq!(gate_check(&steps(), 0, Some("alice"), 99), Some(false));
+        assert_eq!(gate_check(&steps(), 0, Some("carol"), 1), Some(false));
+    }
 }

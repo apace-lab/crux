@@ -8,7 +8,7 @@ anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ll_parser = { path = "../ll_parser" }
+rail-rs = { path = "../ll_parser" }
 afg_instrument = { path = "afg_instrument" }
 afg_observe = { path = "afg_observe" }
 afg_scheduler = { path = "afg_scheduler" }
