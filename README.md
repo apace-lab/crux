@@ -1,4 +1,4 @@
-# AFG — Access-Flow Guard
+# AFG — Access Flow Guard
 
 AFG detects and reproduces **cross-user data leaks** in async Rust services: cases
 where one principal's request can read data written by another principal
