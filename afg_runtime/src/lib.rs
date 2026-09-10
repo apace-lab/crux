@@ -330,7 +330,7 @@ pub async fn schedule_point(site: PACallSiteID, file: &'static str, line: u32) {
         spins += 1;
         if spins >= max_spins {
             eprintln!(
-                "[afg-runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
+                "[afg_runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
             );
             return;
         }

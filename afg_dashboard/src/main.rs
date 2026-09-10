@@ -7,7 +7,7 @@
 // It runs the real `afg_observe::analyze_traces` + `afg_scheduler::generate_schedules`
 // over the trace(s) and serves a browser console showing events, per-principal
 // scopes, cross-user overlaps, schedules, any replay verdicts, and any optional
-// app-reported leaks (afg-runtime `Leak` events).
+// app-reported leaks (afg_runtime `Leak` events).
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};

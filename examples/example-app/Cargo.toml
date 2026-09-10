@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-afg-runtime = { path = "../afg-runtime" }
+afg_runtime = { path = "../../afg_runtime" }
 madsim = "=0.2.31"
 tokio = { version = "=0.2.30", package = "madsim-tokio", features = ["rt", "sync", "macros", "time"] }

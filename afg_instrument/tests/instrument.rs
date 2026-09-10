@@ -20,7 +20,7 @@ fn write_fixture(dir: &PathBuf) {
 }
 
 fn runtime_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../afg-runtime")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../afg_runtime")
 }
 
 #[test]
@@ -46,9 +46,9 @@ fn adds_runtime_dep_and_qualified_macros() {
 
     instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
 
-    // Gap 1: the instrumented app depends on afg-runtime.
+    // Gap 1: the instrumented app depends on afg_runtime.
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("afg-runtime"), "runtime dep not added:\n{manifest}");
+    assert!(manifest.contains("afg_runtime"), "runtime dep not added:\n{manifest}");
 
     // Gap 1: macros are inserted fully-qualified (no `use` needed).
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();

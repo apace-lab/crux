@@ -12,5 +12,5 @@ export KIT
 export OUT="$KIT/out"
 export AFG_BIN="$AFG_ROOT/afg_prototype/target/debug/afg"
 export SIGS="$AFG_ROOT/rail-rs/signatures"
-export DASH="$AFG_ROOT/afg_prototype/afg-dashboard"
+export DASH="$AFG_ROOT/afg_prototype/afg_dashboard"
 mkdir -p "$OUT"

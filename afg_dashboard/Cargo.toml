@@ -1,5 +1,5 @@
 [package]
-name = "afg-dashboard"
+name = "afg_dashboard"
 version = "0.1.0"
 edition = "2021"
 

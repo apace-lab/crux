@@ -68,7 +68,7 @@ pub fn instrument_project(
         by_file.entry(site.file.clone()).or_default().push(site);
     }
 
-    // Crates we actually rewrite; the afg-runtime dep is added to each of these (a
+    // Crates we actually rewrite; the afg_runtime dep is added to each of these (a
     // real app can be a cargo workspace, so the dep must go in each member crate,
     // not the workspace root).
     let mut runtime_manifests: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -171,7 +171,7 @@ pub fn instrument_project(
         fs::write(path, lines.join("\n") + "\n")?;
     }
 
-    // Make the afg-runtime macros available in every crate we rewrote. Fall back
+    // Make the afg_runtime macros available in every crate we rewrote. Fall back
     // to the project root for a single-crate app (no member crate was recorded).
     if runtime_manifests.is_empty() {
         ensure_runtime_dependency(&dst.join("Cargo.toml"), runtime_crate_path)?;
@@ -260,13 +260,13 @@ fn extract_first_arg(line: &str, call_name: &str) -> Option<String> {
     }
 }
 
-/// Append an `afg-runtime` path dependency to the instrumented app's Cargo.toml
+/// Append an `afg_runtime` path dependency to the instrumented app's Cargo.toml
 /// (idempotent), so the injected macros resolve.
 fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Result<()> {
     let mut text = fs::read_to_string(manifest).with_context(|| {
         format!("instrumented app has no Cargo.toml at {}", manifest.display())
     })?;
-    if text.contains("afg-runtime") {
+    if text.contains("afg_runtime") {
         return Ok(());
     }
     let abs = fs::canonicalize(runtime_crate_path)
@@ -275,7 +275,7 @@ fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Resu
         text.push('\n');
     }
     text.push_str(&format!(
-        "\n[dependencies.afg-runtime]\npath = {:?}\n",
+        "\n[dependencies.afg_runtime]\npath = {:?}\n",
         abs.display().to_string()
     ));
     fs::write(&manifest, text)?;

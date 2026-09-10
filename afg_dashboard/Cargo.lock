@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "afg-dashboard"
+name = "afg_dashboard"
 version = "0.1.0"
 dependencies = [
  "afg_observe",
