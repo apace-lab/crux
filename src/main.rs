@@ -126,6 +126,85 @@ fn data_access_kind(category: &str) -> AccessKind {
     }
 }
 
+/// Compute a shared-store RESOURCE id for each data-access site, keyed by
+/// callsite_id. The store a data-access call touches is a pointer argument (a
+/// `&Pool` / `&Transaction` / store handle) whose points-to target is the store
+/// object; that same object is referenced by every data-access site on that store.
+/// So a site's resource id is the points-to target its arguments reference that is
+/// shared with the most other data-access sites. Two sites on the same store (a
+/// write via `execute`, a read via `fetch_one`) therefore get the SAME resource id
+/// even though their per-callsite PANodes differ, which is what lets the
+/// write-then-read leak verdict link across them. Sites with no shared store
+/// pointee (e.g. a lone store) get no id and fall back to per-callsite behaviour.
+fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collections::HashMap<usize, u64> {
+    use std::collections::{BTreeSet, HashMap};
+
+    // Per data-access site: the pointees its store arguments alias (tier 1), and
+    // the store-handle argument nodes themselves (tier 2 fallback).
+    let mut site_pointees: Vec<(usize, BTreeSet<usize>)> = Vec::new();
+    let mut site_handles: Vec<(usize, BTreeSet<usize>)> = Vec::new();
+    for point in engine.semantic_points.iter() {
+        if !matches!(point.kind, rail_rs::taint_analysis::SemanticPointKind::DataAccess { .. }) {
+            continue;
+        }
+        let mut pts: BTreeSet<usize> = BTreeSet::new();
+        let mut handles: BTreeSet<usize> = BTreeSet::new();
+        for arg in &point.store_arg_nodes {
+            if let Some(n) = engine.nodes.get(arg) {
+                pts.extend(n.points_to.iter().copied());
+                if n.is_store_handle() {
+                    handles.insert(*arg);
+                }
+            }
+        }
+        if std::env::var_os("AFG_DEBUG_RESOURCE").is_some() {
+            eprintln!(
+                "[afg-resource] callsite {} pointees={:?} handles={:?}",
+                point.callsite_id, pts, handles
+            );
+        }
+        site_pointees.push((point.callsite_id, pts));
+        site_handles.push((point.callsite_id, handles));
+    }
+
+    // How many data-access sites reference each candidate (pointee, then handle).
+    let freq = |sites: &[(usize, BTreeSet<usize>)]| -> HashMap<usize, usize> {
+        let mut f: HashMap<usize, usize> = HashMap::new();
+        for (_, s) in sites {
+            for x in s {
+                *f.entry(*x).or_default() += 1;
+            }
+        }
+        f
+    };
+    let pointee_freq = freq(&site_pointees);
+    let handle_freq = freq(&site_handles);
+
+    // Each site's resource id is the candidate it references that is shared with
+    // the most other sites (shared by >= 2), ties broken by smallest id. Prefer a
+    // shared pointee (the store object the handle aliases, the real-app case) and
+    // fall back to a shared store-handle node (the stub case, where the store is
+    // hidden behind a global and only a handle is passed).
+    let pick = |cands: &BTreeSet<usize>, f: &HashMap<usize, usize>| -> Option<usize> {
+        cands
+            .iter()
+            .filter(|c| f.get(*c).copied().unwrap_or(0) >= 2)
+            .max_by_key(|c| (f[*c], std::cmp::Reverse(**c)))
+            .copied()
+    };
+
+    let mut out: HashMap<usize, u64> = HashMap::new();
+    for i in 0..site_pointees.len() {
+        let (id, pts) = &site_pointees[i];
+        let handles = &site_handles[i].1;
+        let chosen = pick(pts, &pointee_freq).or_else(|| pick(handles, &handle_freq));
+        if let Some(r) = chosen {
+            out.insert(*id, r as u64);
+        }
+    }
+    out
+}
+
 /// Adapter between this prototype and our existing rail-rs + nested taint analysis.
 ///
 /// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
@@ -183,6 +262,10 @@ fn run_pag_and_afg(
     let mut sites: Vec<InstrumentSite> = Vec::new();
     let (mut n_auth, mut n_access, mut n_credential, mut n_data) = (0usize, 0usize, 0usize, 0usize);
 
+    // Resource id per data-access site: the shared store its arguments alias, so a
+    // write and a read on the same store link even though their PANodes differ.
+    let data_resource_ids = compute_data_resource_ids(&engine);
+
     // 1) Auth sites at access-control points; 2) Access sites at LLM calls.
     for point in engine.semantic_points.iter() {
         match &point.kind {
@@ -238,6 +321,8 @@ fn run_pag_and_afg(
                         // gate this access so a replay schedule can order it
                         // across principals (the LLM call sits in an async fn).
                         schedule_site: Some(node as u64),
+                        // LLM calls are not a shared data store; no resource id.
+                        resource: None,
                     },
                     reason: format!("llm access: {}", point.callee.as_deref().unwrap_or("?")),
                 });
@@ -267,6 +352,9 @@ fn run_pag_and_afg(
                         // gate it so a replay schedule can order a write before a
                         // cross-user read (data-store calls are usually async).
                         schedule_site: Some(node as u64),
+                        // the shared store this access touches (points-to), so a
+                        // write and a read on the same store link across PANodes.
+                        resource: data_resource_ids.get(&point.callsite_id).copied(),
                     },
                     reason: format!("data access ({category}): {}", point.callee.as_deref().unwrap_or("?")),
                 });
@@ -301,6 +389,8 @@ fn run_pag_and_afg(
                     call_name: None,
                     // no gate: static-overlap sites may not sit in an async fn.
                     schedule_site: None,
+                    // a raw overlap node is already the shared resource itself.
+                    resource: None,
                 },
                 reason: format!("static cross-user overlap ({} principals)", principals.len()),
             });
@@ -427,10 +517,14 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&verdict)?,
             )?;
             match &verdict {
-                LeakVerdict::Reproduced { writer, reader, panode } => {
+                LeakVerdict::Reproduced { writer, reader, panode, resource } => {
                     reproduced += 1;
+                    let where_ = match resource {
+                        Some(r) => format!("resource {r}"),
+                        None => format!("PANode {panode}"),
+                    };
                     println!(
-                        "      schedule {i:03}: LEAK REPRODUCED ({writer} wrote PANode {panode}, then {reader} read it)"
+                        "      schedule {i:03}: LEAK REPRODUCED ({writer} wrote {where_}, then {reader} read it)"
                     );
                 }
                 LeakVerdict::NotReproduced { reason } => {

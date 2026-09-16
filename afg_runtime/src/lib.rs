@@ -445,6 +445,21 @@ macro_rules! afg_access {
     (node = $node:expr, kind = $kind:expr, function = $function_id:expr $(,)?) => {{
         $crate::access($node, $kind, Some($function_id), file!(), line!());
     }};
+    // Resource-linked variant without a runtime count: the instrumenter knows the
+    // static store the access touches (the points-to resource) but not the rows it
+    // yields, so count is left unset. This is enough to link a write and a read on
+    // the same store across different call sites.
+    (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr $(,)?) => {{
+        $crate::access_resource(
+            $node,
+            $kind,
+            Some($function_id),
+            Some(($resource).to_string()),
+            None,
+            file!(),
+            line!(),
+        );
+    }};
     // Resource-linked variants: name the instance touched and the rows it yielded.
     (node = $node:expr, kind = $kind:expr, resource = $resource:expr, count = $count:expr $(,)?) => {{
         $crate::access_resource(

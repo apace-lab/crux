@@ -29,6 +29,14 @@ pub enum SiteAction {
         /// `afg_schedule_point!(site = ..)` gate is inserted just before the
         /// access so a replay schedule can order this access across principals.
         schedule_site: Option<u64>,
+        /// Resource id of the shared store this access touches: the points-to
+        /// target the data-access call's store argument aliases. Two data-access
+        /// sites on the same store (e.g. a write via `execute` and a read via
+        /// `fetch_one`) get the SAME resource id even though their per-callsite
+        /// PANodes differ, so the write-then-read leak can be linked across them.
+        /// None for accesses with no identifiable shared store (e.g. LLM calls).
+        #[serde(default)]
+        resource: Option<u64>,
     },
     /// Establish the runtime principal for the current task. Injected before the
     /// auth call line; the instrumenter extracts the auth call's first argument
@@ -107,6 +115,7 @@ pub fn instrument_project(
                     access,
                     call_name,
                     schedule_site,
+                    resource,
                 } => {
                     let fn_id = function_id.unwrap_or(0);
                     let kind = match access {
@@ -122,8 +131,19 @@ pub fn instrument_project(
                         }
                         _ => String::new(),
                     };
+                    // When the producer resolved the shared store this access
+                    // touches, tag the access with that resource id so a write and a
+                    // read on the same store link even though their PANodes differ.
+                    let access_call = match resource {
+                        Some(r) => format!(
+                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id}, resource = \"res:{r}\");"
+                        ),
+                        None => format!(
+                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                        ),
+                    };
                     let injected = format!(
-                        "{gate}afg_runtime::afg_monitor!(function = {fn_id});\nafg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                        "{gate}afg_runtime::afg_monitor!(function = {fn_id});\n{access_call}"
                     );
                     // Insert before the located call line (executed path, and
                     // syntactically safe even when the call is a tail expression),

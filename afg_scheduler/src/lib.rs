@@ -16,6 +16,13 @@ pub struct ScheduleStep {
 pub struct SchedulePlan {
     pub reason: String,
     pub panode: u64,
+    /// Shared-store resource this schedule targets (e.g. "res:123"). When set, the
+    /// leak spans a write and a read on the SAME store through possibly different
+    /// PANodes (a real store's write and read are different methods), so the
+    /// verdict is checked per resource rather than per PANode. None keeps the
+    /// single-PANode behaviour (e.g. a hand-marked cache node).
+    #[serde(default)]
+    pub resource: Option<String>,
     pub steps: Vec<ScheduleStep>,
 }
 
@@ -60,6 +67,86 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
 
     let mut out = Vec::new();
 
+    // Resource-linked pass. A real store's write and read are DIFFERENT methods
+    // (e.g. `execute` vs `fetch_one`), so a write-then-read leak spans two PANodes
+    // joined only by the shared store. The single-PANode overlap pass below cannot
+    // see that. Here we group data-access accesses by their resource id and, when
+    // one principal writes a resource and a DIFFERENT principal reads it, schedule
+    // the writer before the reader. The verdict is then checked per resource.
+    {
+        use std::collections::BTreeMap;
+        // site (gate) and node of a principal's access of `kind` on `resource`.
+        let site_and_node = |principal: &str, resource: &str, kind: &str| -> Option<(u64, u64)> {
+            for a in &accesses {
+                if a.get("principal").and_then(|x| x.as_str()) == Some(principal)
+                    && a.get("resource").and_then(|x| x.as_str()) == Some(resource)
+                    && a.get("access")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.eq_ignore_ascii_case(kind))
+                        .unwrap_or(false)
+                {
+                    let node = a.get("panode").and_then(|x| x.as_u64()).unwrap_or(0);
+                    let site = a.get("site").and_then(|x| x.as_u64()).unwrap_or(node);
+                    return Some((site, node));
+                }
+            }
+            None
+        };
+
+        let mut by_resource: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+        for a in &accesses {
+            let Some(res) = a.get("resource").and_then(|x| x.as_str()) else { continue };
+            let Some(p) = a.get("principal").and_then(|x| x.as_str()) else { continue };
+            let is_write = a
+                .get("access")
+                .and_then(|x| x.as_str())
+                .map(|s| s.eq_ignore_ascii_case("write"))
+                .unwrap_or(false);
+            let entry = by_resource.entry(res.to_string()).or_default();
+            if is_write {
+                entry.0.insert(p.to_string());
+            } else {
+                entry.1.insert(p.to_string());
+            }
+        }
+
+        for (resource, (writers, readers)) in &by_resource {
+            let mut made = false;
+            for w in writers {
+                for r in readers {
+                    if w == r {
+                        continue;
+                    }
+                    let (Some((ws, wnode)), Some((rs, _))) = (
+                        site_and_node(w, resource, "write"),
+                        site_and_node(r, resource, "read"),
+                    ) else {
+                        continue;
+                    };
+                    out.push(SchedulePlan {
+                        reason: format!(
+                            "cross-user leak on resource {resource} ({w} writes before {r} reads, linked across PANodes)"
+                        ),
+                        panode: wnode,
+                        resource: Some(resource.clone()),
+                        steps: vec![
+                            ScheduleStep { principal: w.clone(), site: ws },
+                            ScheduleStep { principal: r.clone(), site: rs },
+                        ],
+                    });
+                    if out.len() >= max_schedules {
+                        return out;
+                    }
+                    made = true;
+                    break;
+                }
+                if made {
+                    break;
+                }
+            }
+        }
+    }
+
     // One schedule per detected cross-user overlap. A cross-user leak is a
     // write-then-read on the shared node, so order the WRITER before the READER
     // (the reader must run after the writer has populated the node) to reproduce
@@ -93,6 +180,7 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
                 out.push(SchedulePlan {
                     reason,
                     panode: node,
+                    resource: None,
                     steps: vec![
                         ScheduleStep {
                             principal: first.to_string(),
@@ -135,6 +223,7 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
                         "synthesized cross-user overlap on PANode {node} ({real} vs {SYNTHETIC_PRINCIPAL}); second user clones the single observed user"
                     ),
                     panode: node,
+                    resource: None,
                     steps: vec![
                         ScheduleStep {
                             principal: real.clone(),
@@ -173,6 +262,10 @@ pub enum LeakVerdict {
         writer: String,
         reader: String,
         panode: u64,
+        /// Set when the leak was linked across the store (write and read on the
+        /// same resource via different PANodes); None for a single-PANode leak.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
     },
     /// The interleaving did not occur; `reason` says why.
     NotReproduced { reason: String },
@@ -202,6 +295,7 @@ pub fn verify_replay<T: Serialize>(plan: &SchedulePlan, replay: &T) -> LeakVerdi
     let writer = plan.steps[0].principal.clone();
     let reader = plan.steps[1].principal.clone();
     let node = plan.panode;
+    let resource = plan.resource.clone();
 
     let accesses = v
         .get("accesses")
@@ -209,43 +303,59 @@ pub fn verify_replay<T: Serialize>(plan: &SchedulePlan, replay: &T) -> LeakVerdi
         .cloned()
         .unwrap_or_default();
 
-    // (order, principal, node, kind) in trace order; `seq` if present, else index.
-    let ordered: Vec<(u64, &str, u64, &str)> = accesses
+    // (order, principal, node, kind, resource) in trace order; `seq` if present.
+    let ordered: Vec<(u64, &str, u64, &str, Option<&str>)> = accesses
         .iter()
         .enumerate()
         .filter_map(|(i, a)| {
             let p = a.get("principal").and_then(|x| x.as_str())?;
             let n = a.get("panode").and_then(|x| x.as_u64())?;
             let k = a.get("access").and_then(|x| x.as_str())?;
+            let res = a.get("resource").and_then(|x| x.as_str());
             let ord = a.get("seq").and_then(|x| x.as_u64()).unwrap_or(i as u64);
-            Some((ord, p, n, k))
+            Some((ord, p, n, k, res))
         })
         .collect();
 
+    // Target match: on a resource (write and read may be on different PANodes) if
+    // the plan names one, else on the single PANode.
+    let on_target = |n: u64, res: Option<&str>| -> bool {
+        match &resource {
+            Some(r) => res == Some(r.as_str()),
+            None => n == node,
+        }
+    };
+    let target = match &resource {
+        Some(r) => format!("resource {r}"),
+        None => format!("PANode {node}"),
+    };
+
     let write_at = ordered
         .iter()
-        .filter(|(_, p, n, k)| *p == writer && *n == node && k.eq_ignore_ascii_case("write"))
+        .filter(|(_, p, n, k, res)| {
+            *p == writer && on_target(*n, *res) && k.eq_ignore_ascii_case("write")
+        })
         .map(|(o, ..)| *o)
         .min();
     let Some(w) = write_at else {
         return LeakVerdict::NotReproduced {
-            reason: format!("writer {writer} did not write PANode {node}"),
+            reason: format!("writer {writer} did not write {target}"),
         };
     };
 
     let read_after = ordered
         .iter()
-        .filter(|(o, p, n, k)| {
-            *p == reader && *n == node && k.eq_ignore_ascii_case("read") && *o > w
+        .filter(|(o, p, n, k, res)| {
+            *p == reader && on_target(*n, *res) && k.eq_ignore_ascii_case("read") && *o > w
         })
         .map(|(o, ..)| *o)
         .min();
 
     if read_after.is_some() {
-        LeakVerdict::Reproduced { writer, reader, panode: node }
+        LeakVerdict::Reproduced { writer, reader, panode: node, resource }
     } else {
         LeakVerdict::NotReproduced {
-            reason: format!("reader {reader} did not read PANode {node} after {writer}'s write"),
+            reason: format!("reader {reader} did not read {target} after {writer}'s write"),
         }
     }
 }
@@ -353,6 +463,7 @@ mod tests {
         SchedulePlan {
             reason: "test".into(),
             panode: node,
+            resource: None,
             steps: vec![step(writer, node), step(reader, node)],
         }
     }
@@ -365,7 +476,7 @@ mod tests {
         ]});
         assert_eq!(
             verify_replay(&plan("alice", "bob", 50), &replay),
-            LeakVerdict::Reproduced { writer: "alice".into(), reader: "bob".into(), panode: 50 }
+            LeakVerdict::Reproduced { writer: "alice".into(), reader: "bob".into(), panode: 50, resource: None }
         );
     }
 
@@ -416,5 +527,65 @@ mod tests {
         assert_eq!(generate_schedules(&obs, 20).len(), 2);
         // max_schedules is respected
         assert_eq!(generate_schedules(&obs, 1).len(), 1);
+    }
+
+    // Resource-linked leak: a real store's write and read are on DIFFERENT PANodes
+    // (execute vs fetch_one) but the SAME resource. The single-PANode verdict would
+    // miss it; the resource-linked verdict reproduces it.
+    #[test]
+    fn verdict_reproduced_across_panodes_on_same_resource() {
+        let plan = SchedulePlan {
+            reason: "test".into(),
+            panode: 10, // the write node; read is on a different node
+            resource: Some("res:900".into()),
+            steps: vec![step("alice", 10), step("bob", 20)],
+        };
+        let replay = json!({ "accesses": [
+            { "seq": 1, "principal": "alice", "panode": 10, "access": "Write", "resource": "res:900" },
+            { "seq": 2, "principal": "bob",   "panode": 20, "access": "Read",  "resource": "res:900" }
+        ]});
+        assert_eq!(
+            verify_replay(&plan, &replay),
+            LeakVerdict::Reproduced {
+                writer: "alice".into(),
+                reader: "bob".into(),
+                panode: 10,
+                resource: Some("res:900".into()),
+            }
+        );
+    }
+
+    // Same two PANodes but DIFFERENT resources must NOT link into a leak.
+    #[test]
+    fn verdict_not_reproduced_across_different_resources() {
+        let plan = SchedulePlan {
+            reason: "test".into(),
+            panode: 10,
+            resource: Some("res:900".into()),
+            steps: vec![step("alice", 10), step("bob", 20)],
+        };
+        let replay = json!({ "accesses": [
+            { "seq": 1, "principal": "alice", "panode": 10, "access": "Write", "resource": "res:900" },
+            { "seq": 2, "principal": "bob",   "panode": 20, "access": "Read",  "resource": "res:901" }
+        ]});
+        assert!(!verify_replay(&plan, &replay).reproduced());
+    }
+
+    // generate_schedules builds a resource-linked schedule when a write and a read
+    // by different principals land on the same resource across different PANodes.
+    #[test]
+    fn generate_resource_linked_schedule() {
+        let obs = json!({
+            "accesses": [
+                { "seq": 1, "principal": "alice", "panode": 10, "access": "Write", "resource": "res:900", "site": 10 },
+                { "seq": 2, "principal": "bob",   "panode": 20, "access": "Read",  "resource": "res:900", "site": 20 }
+            ],
+            "overlaps": []
+        });
+        let plans = generate_schedules(&obs, 20);
+        let linked = plans.iter().find(|p| p.resource.as_deref() == Some("res:900"));
+        let linked = linked.expect("expected a resource-linked schedule");
+        assert_eq!(linked.steps[0].principal, "alice");
+        assert_eq!(linked.steps[1].principal, "bob");
     }
 }

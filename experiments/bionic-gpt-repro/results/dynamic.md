@@ -1,121 +1,92 @@
-# bionic-gpt Phase 2: instrumented-from-source dynamic run (2026-09-16)
+# bionic-gpt: the instrumented dynamic run
 
-## What this shows
+This is the dynamic half of the bionic experiment. We build bionic from source,
+add AFG probes to the real handlers, run it with two real users, and check what
+AFG's trace says. The point is to show the dynamic pipeline agreeing with the
+static picture from RESULTS.md: bionic does not leak, and AFG sees why.
 
-The real bionic-gpt `web-server`, **built from source** against the **live
-Postgres**, **instrumented at the sites AFG cares about**, run with **two real
-users** through the **real HTTP request path**, produces an AFG trace whose
-resource-linked verdict is **no leak**. This is the positive-control side of the
-dynamic pipeline: the shared-store access is dominated by an ownership check, so
-even though both principals reach the same PANode, no cross-user data flows.
+Run date: 2026-09-16.
 
-The same analyzer flags a tabby-shape trace (unscoped read that returns rows) as
-a leak, so the no-leak verdict on bionic is a real discrimination, not a blind
-pass.
+## What we found
 
-## Build (real bionic build environment)
+The trace AFG produced shows alice writing and reading her conversation, and bob
+reading the same conversation id and getting nothing back. AFG's resource-linked
+verdict on that trace is: no leak. The coarse signal (both users reach the same
+chat store node) does show an overlap, but the per-conversation verdict clears it,
+because bob's read of alice's conversation returned zero rows. That is the whole
+value of the per-instance check: an overlap on the shared node is only a real
+leak if someone was actually served another user's data.
 
-Built in bionic's own devcontainer image, arm64, on the live DB network:
+For contrast, the same analyzer run on a tabby-shaped trace (a read that does
+return another user's rows) reports one confirmed leak. So the no-leak verdict on
+bionic is a real discrimination, not the analyzer failing to fire.
 
-- image `purtontech/rust-on-nails-devcontainer:1.3.46` (arm64), rustc 1.97.1
-- `CARGO_TARGET_DIR` on a docker volume (fast native fs; the macOS bind mount is
-  slow for cargo)
-- `DATABASE_URL` / `APP_DATABASE_URL` -> the live `bionic-gpt` DB on the
-  `infra-as-code_default` network, so cornucopia's compile-time `query`
-  introspection and typecheck run against the real schema
-- `cargo build --bin web-server` (baseline built clean in ~90s; the instrumented
-  rebuild was incremental, ~18s)
+## How it happens
 
-## Instrumentation (real source, AFG probe)
+Same enforcement as RESULTS.md: get_permisisons sets the RLS user id, and the
+chats query filters by `user_id = current_app_user()`. bob's read runs, but the
+filter returns nothing, so the probe records a read with count 0. alice's own
+read records count 1. AFG decides ownership per conversation from the trace (the
+first writer owns it, here alice) and only flags a cross-user read that returns
+rows. bob's returns none, so nothing is flagged.
 
-A small probe module was added to the real web-server crate and called at the
-three sites AFG flags. It emits the exact AFG JSONL trace schema afg_observe
-consumes, reading the principal explicitly from the request's `Jwt` (which axum
-already threads into every handler), so no task-local middleware is needed and
-the trace is correct under real multi-threaded axum.
+## How we tested it
 
-Files touched (real bionic source):
+Built the real bionic web-server from source in bionic's own devcontainer image
+(purtontech/rust-on-nails-devcontainer:1.3.46, rustc 1.97.1), on the live DB
+network so cornucopia's compile-time query checks ran against the real schema.
+Put the cargo target dir on a docker volume, the macOS bind mount is too slow for
+cargo.
 
-- `crates/web-server/afg_probe.rs` (new): trace writer; `auth()` and `access()`.
-  `access` records the resource INSTANCE (`conversation:<id>`) and the rows the
-  access yielded, keyed to PANode `7100` (the shared `llm.chats` store).
-- `crates/web-server/main.rs`: `pub mod afg_probe;`
-- `crates/web-server/jwt.rs`: `afg_probe::auth(sub, "jwt")` at both points where a
-  `Jwt` is established (the real reverse-proxy auth path).
-- `crates/web-server/handlers/console/send_message.rs`: after the chat insert,
-  `afg_probe::access(WRITE, conversation:<id>, count=1)`.
-- `crates/web-server/handlers/console/conversation.rs`: after the chats fetch,
-  `afg_probe::access(READ, conversation:<id>, count=chats.len())`.
+Instrumentation is a small probe module in the real web-server crate
+(crates/web-server/afg_probe.rs) plus three call sites: the auth point in jwt.rs,
+the chat write in send_message.rs, and the chat read in conversation.rs. The
+probe reads the principal straight from the request's Jwt, which axum already
+hands to every handler, so we do not need a task-local middleware and the trace
+is correct under real multi-threaded axum. It writes the same JSONL schema
+afg_observe reads.
 
-## Run (two real users, real request path)
+Then we ran the instrumented binary with real header auth (DANGER_JWT_OVERRIDE
+unset), had alice create a conversation and read it, and had bob try to read it.
+The HTTP responses matched the trace exactly: alice's page contained her secret,
+bob's did not.
 
-Instrumented binary run on the DB network with `DANGER_JWT_OVERRIDE` unset (so
-real `X-Forwarded-User` / `X-Forwarded-Email` auth is exercised), `AFG_TRACE_PATH`
-set. Then:
-
-1. alice `POST /o/gbHJdm/send_message` (message `ALICE_PHASE2_SECRET`) -> creates
-   `conversation:2`.
-2. alice `GET /o/gbHJdm/console/2` (own read) -> 200.
-3. bob `GET /o/EfhxLZ/console/2` (bob's team, alice's conversation id) -> 200.
-
-HTTP content matched the trace exactly: alice's page contained
-`ALICE_PHASE2_SECRET` (1 hit), bob's did not (0 hits).
-
-## Trace (produced by the real instrumented app)
-
-`results/trace.jsonl`:
+Trace (results/trace.jsonl):
 
 ```
-auth   principal=alice-sub
-access WRITE node=7100 resource=conversation:2 count=1   send_message.rs:139
-auth   principal=alice-sub
-access READ  node=7100 resource=conversation:2 count=1   conversation.rs:38
-auth   principal=bob-sub
-access READ  node=7100 resource=conversation:2 count=0   conversation.rs:38
+auth   alice
+write  conversation:2  count 1     send_message.rs
+read   conversation:2  count 1     conversation.rs   (alice, her own)
+auth   bob
+read   conversation:2  count 0     conversation.rs   (bob, blocked by the ownership check)
 ```
 
-## Verdict (afg_observe)
-
-`cargo run --example analyze -- results/trace.jsonl`:
+Verdict (afg_observe):
 
 ```
-coarse PANode overlaps (static-style signal): 1
-  alice-sub <-> bob-sub on nodes {7100}
-
-resource-linked leak verdict: 0 confirmed leak(s)
-  none: every cross-principal read of a shared instance returned no rows
-        (dominated by an ownership check)
+coarse overlap: alice <-> bob on the chat store node
+resource-linked leak verdict: 0 leaks (every cross-user read returned no rows)
 ```
 
-The coarse overlap (both principals reach node 7100) is the static-style signal
-that alone would false-positive. The **resource-linked verdict** refines it: bob
-read the same instance (`conversation:2`) alice owns, but was served 0 rows, so
-no data flowed. Positive control confirmed.
+results/negative_control_trace.jsonl is the tabby-shaped trace the analyzer
+flags as a leak, kept next to this one so the contrast is checkable.
 
-Negative control (`results/negative_control_trace.jsonl`, tabby shape, illustr.):
-same coarse overlap on node 7100, but the verdict is **1 confirmed leak** (bob
-served 3 rows of alice's `thread:9`). Same analyzer, opposite verdict, driven
-purely by whether the cross-principal read returned data.
+## How to reproduce
 
-## New AFG machinery this required
+1. Build web-server from source in the devcontainer image with the live DB
+   reachable, SQLX is not used here (cornucopia needs the live schema).
+2. Add the probe module and the three calls (see the diff in the web-server
+   crate), rebuild.
+3. Run the binary with APP_DATABASE_URL set, DANGER_JWT_OVERRIDE unset,
+   AFG_TRACE_PATH pointing at a file.
+4. alice creates + reads a conversation, bob reads it.
+5. Analyze: `cargo run --example analyze -- <trace.jsonl>` from afg_observe.
 
-The per-instance verdict is the resource-linked refinement (Option A):
+## One caveat, stated plainly
 
-- `afg_runtime`: `Event::Access` gained optional `resource` and `count`;
-  `access_resource()` and `afg_access!(... resource=, count=)`.
-- `afg_observe`: `AccessObservation` parses `resource`/`count`;
-  `ResourceLeak` + `compute_resource_leaks` derive the verdict (owner = first
-  writer of an instance; a read by another principal that returns rows is a leak;
-  a read that returns none was dominated). Unit tests cover both controls.
-- `afg_observe/examples/analyze.rs`: analyze an existing trace without re-running
-  the app.
-
-## Not done here (and why)
-
-AFG's static producer auto-locating the sites on bionic (the LLVM step) is
-blocked by a toolchain version matrix: bionic requires rustc 1.97 (emits LLVM 22
-IR), while the producer's `llvm-ir` parser targets LLVM <= 21, and bionic cannot
-downgrade to an older rustc (its deps need 1.97). Static AFG is already published
-and the current focus is dynamic, so this corroboration is deferred rather than
-forcing a toolchain match. The instrumented sites here are the same categories
-the catalog matches (jsonwebtoken auth, tokio-postgres data access).
+AFG's static producer could not auto-locate the sites on bionic because bionic
+needs rustc 1.97 (LLVM 22) and the producer's IR parser targets LLVM 21 and
+below, and bionic cannot be built on an older rustc. The static side is already a
+published result, and the current focus is dynamic, so we instrumented the sites
+by hand rather than force a toolchain match. AppFlowy-Cloud, which pins rustc
+1.86 / LLVM 19, does not have this problem.

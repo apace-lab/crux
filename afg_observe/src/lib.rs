@@ -28,8 +28,11 @@ pub struct AccessObservation {
     pub function_id: Option<u64>,
     pub site: Option<u64>,
     // Resource INSTANCE the access touched (e.g. "conversation:1"), and the rows it
-    // yielded. Present when the site is instrumented with the resource-linked form.
+    // yielded. Present when the site is instrumented with the resource-linked form;
+    // absent (default) for older traces and apps that do not emit a resource.
+    #[serde(default)]
     pub resource: Option<String>,
+    #[serde(default)]
     pub count: Option<u64>,
 }
 
@@ -67,6 +70,9 @@ pub struct ObservationResult {
     pub accesses: Vec<AccessObservation>,
     pub principals: BTreeMap<String, PrincipalScope>,
     pub overlaps: Vec<ScopeOverlap>,
+    // Empty for apps/traces that emit no resource; also defaults to empty when an
+    // older scopes.json without this field is read back.
+    #[serde(default)]
     pub resource_leaks: Vec<ResourceLeak>,
 }
 

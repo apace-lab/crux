@@ -1,100 +1,91 @@
-# bionic-gpt: live-app leak/no-leak result (2026-09-16)
+# bionic-gpt: does it leak conversations across users?
 
-## Verdict
+Short answer: no. A second logged-in user cannot read someone else's chat
+conversation. bionic-gpt is a clean negative case for AFG (a real app that gets
+access control right), which we use as the contrast to tabby (which leaks).
 
-bionic-gpt is a **clean true negative** (a positive control for AFG). A second
-authenticated user CANNOT read another user's conversation by id. The shared
-`llm.chats` store read is dominated on every path by an ownership check bound to
-the current principal.
+Run date: 2026-09-09 (re-confirmed while building the dynamic run 2026-09-16).
 
-This is the deliberate contrast to TabbyML/tabby, where
-`list_thread_messages` runs `WHERE thread_id = {id}` with no user filter and
-leaks cross-user (see `../../tabby-repro`).
+## What we found
 
-## Setup (real full app)
+alice creates a conversation and sends a message. bob then asks for that same
+conversation by its id. bob gets an empty page, not alice's message. alice, of
+course, sees her own message. So the shared chat store is not exposed across
+users.
 
-- Real deployment: `bionic-gpt/infra-as-code/docker-compose.yml`
-  (`ghcr.io/bionic-gpt/bionicgpt:1.12.12`, `ankane/pgvector`, migrations,
-  rag-engine). App on `localhost:3000`, postgres internal only.
-- `DANGER_JWT_OVERRIDE` unset (scratch override), so auth is the real
-  `X-Forwarded-User` / `X-Forwarded-Email` reverse-proxy path from
-  `crates/web-server/jwt.rs`.
-- Two real users auto-registered through the real request path:
-  - alice: sub `alice-sub`, email `alice@acme.org`, db user_id 2, team public `gbHJdm`
-  - bob:   sub `bob-sub`,   email `bob@acme.org`,   db user_id 3, team public `EfhxLZ`
-- Deployment config (an admin normally adds this; the stock compose ships no
-  model, so it was seeded once): one `LLM` model + one `Company`-visible `Model`
-  prompt. This is config, not the security boundary.
+This is the opposite of tabby, where a second user who supplies another user's
+thread id is served that thread's messages.
 
-## The enforcement (why there is no leak)
+## How it happens
 
-`crates/web-server/handlers/console/conversation.rs` reads chats by id, but
-before any query it calls `authz::get_permisisons(...)`
-(`crates/db/authz.rs`), which runs
-`SET LOCAL row_level_security.user_id = <authenticated user.id>`. That binds
-`current_app_user()`. The chats query then carries an explicit ownership
-predicate (`crates/db/queries/chats.sql`):
+Two guards, both keyed to the user making the request:
 
-```sql
-WHERE
-    -- Make sure the chat belongs to the user
-    conversation_id IN (SELECT id FROM llm.conversations WHERE user_id = current_app_user())
-AND
-    conversation_id = :conversation_id
-```
+1. Every request that touches the console goes through
+   `authz::get_permisisons` (crates/db/authz.rs) before any query runs. That
+   function does `SET LOCAL row_level_security.user_id = <the user's id>`, which
+   sets what `current_app_user()` returns for the rest of the transaction.
 
-So the access is guarded twice: the app-level predicate and Postgres RLS, both
-keyed to the per-request principal. In AFG terms the shared-resource access is
-dominated by an ownership check for the current principal, so the leak invariant
-does not fire.
+2. The query that loads chats (crates/db/queries/chats.sql) has the ownership
+   check written into the SQL itself:
 
-## Empirical proof
+   ```sql
+   WHERE
+       conversation_id IN (SELECT id FROM llm.conversations WHERE user_id = current_app_user())
+   AND
+       conversation_id = :conversation_id
+   ```
 
-### HTTP (real request path)
+So the read is filtered to conversations the current user owns, and Postgres
+row-level security backs it up. When bob asks for alice's conversation,
+`current_app_user()` is bob, the subquery returns nothing, and he gets zero rows.
+In AFG terms: the read of the shared chat store is dominated on every path by an
+ownership check for the current user, so the leak invariant never fires.
 
-alice creates conversation id 1 with message `ALICE_SECRET_9f3b_do_not_leak`
-via `POST /o/gbHJdm/send_message` (303 -> `/o/gbHJdm/console/1`).
+## How we tested it
 
-| actor | request | result | alice's secret in response |
-| ----- | ------- | ------ | -------------------------- |
-| alice | `GET /o/gbHJdm/console/1` (own)          | 200 | present (control passes) |
-| bob   | `GET /o/EfhxLZ/console/1` (own team, alice's conv id) | 200, empty console | absent |
-| bob   | `GET /o/gbHJdm/console/1` (alice's team url)          | 422 (team-membership authz rejects) | absent |
+Against the real deployment, not a stub. bionic's own docker-compose (postgres,
+migrations, rag-engine, the app on :3000), with `DANGER_JWT_OVERRIDE` unset so
+the real reverse-proxy auth path is exercised (X-Forwarded-User /
+X-Forwarded-Email). Two users, alice and bob, each on their own team, auto
+registered on first authenticated request.
 
-bob's IDOR probe returns a valid but empty "AI Chat Console" page: the handler
-runs, the ownership predicate filters alice's rows out. The cross-team URL is
-rejected even earlier by the team lookup in `get_permisisons`.
+The stock compose ships no model or prompt, and the console refuses to render
+without one, so we seeded one model plus one Company-visible prompt first. That
+is deployment config an admin normally adds; it is not the security boundary.
 
-### SQL (RLS + predicate, corroboration)
+We drove it two ways and they agree:
 
-Running the app's exact chats predicate as `application_user` under each
-principal's RLS binding:
+HTTP (the real request path):
+
+| who   | request                              | result                       |
+| ----- | ------------------------------------ | ---------------------------- |
+| alice | GET her own conversation             | 200, her message is present  |
+| bob   | GET alice's conversation (his team)  | 200, empty, message absent   |
+| bob   | GET alice's conversation (her team)  | 422, team check rejects him  |
+
+SQL (running the exact chats predicate under each user's RLS binding):
 
 ```
-alice (current_app_user=2) conv1_rows = 1
-bob   (current_app_user=3) conv1_rows = 0
+alice (current_app_user = 2): 1 row
+bob   (current_app_user = 3): 0 rows
 ```
 
-## Reproduce
+## How to reproduce
 
-App up (from `bionic-gpt/infra-as-code`, with DANGER_JWT_OVERRIDE unset).
-Then, with alice/bob headers as above:
+Bring bionic up from infra-as-code/docker-compose.yml with DANGER_JWT_OVERRIDE
+unset, seed a model + a Company-visible Model prompt, then:
 
 ```sh
 A=(-H "X-Forwarded-User: alice-sub" -H "X-Forwarded-Email: alice@acme.org")
 B=(-H "X-Forwarded-User: bob-sub"   -H "X-Forwarded-Email: bob@acme.org")
-# alice writes
-curl -s -D- -o /dev/null "${A[@]}" -F message=ALICE_SECRET_9f3b_do_not_leak -F prompt_id=1 \
+
+# alice creates a conversation with a message
+curl -s -D- -o /dev/null "${A[@]}" -F message=ALICE_SECRET -F prompt_id=1 \
   http://localhost:3000/o/gbHJdm/send_message | grep -i location   # -> /o/gbHJdm/console/1
-# control + probe
-curl -s "${A[@]}" http://localhost:3000/o/gbHJdm/console/1 | grep -c ALICE_SECRET_9f3b   # 1
-curl -s "${B[@]}" http://localhost:3000/o/EfhxLZ/console/1 | grep -c ALICE_SECRET_9f3b   # 0
+
+# control, then the probe
+curl -s "${A[@]}" http://localhost:3000/o/gbHJdm/console/1 | grep -c ALICE_SECRET   # 1
+curl -s "${B[@]}" http://localhost:3000/o/EfhxLZ/console/1 | grep -c ALICE_SECRET   # 0
 ```
 
-## What this means for AFG
-
-bionic-gpt confirms the enforcement side of the dominance invariant: when every
-shared-resource access is dominated by an ownership check for the principal
-(here RLS + an in-query predicate), AFG should report no leak. tabby is the
-violation of the same invariant. The pair (tabby leaks, bionic does not) is the
-evaluation contrast for the missing-ownership-check contribution.
+The dynamic (instrumented) run of the same app is written up in dynamic.md.
