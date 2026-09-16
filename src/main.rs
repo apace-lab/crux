@@ -35,8 +35,8 @@ struct Cli {
     #[arg(long, default_value = "../rail-rs/signatures/data_access_functions.json")]
     data_access: PathBuf,
 
-    /// Path to the afg-runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "afg-runtime")]
+    /// Path to the afg_runtime crate, added as a dependency to the instrumented app
+    #[arg(long, default_value = "afg_runtime")]
     afg_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]

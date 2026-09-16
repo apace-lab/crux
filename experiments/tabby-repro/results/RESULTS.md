@@ -49,7 +49,7 @@ leaks     : { reader: bob@example.com, owner: alice@example.com,
               detail: "ALICE-PRIVATE: quarterly numbers" }
 ```
 
-The leak is real: tabby's `list_thread_messages` (ee/tabby-db/src/threads.rs)
+**The leak is real**: tabby's `list_thread_messages` (ee/tabby-db/src/threads.rs)
 builds `WHERE thread_id = {id}` with no user_id filter, so any authenticated user
 reading another user's thread id is served their messages.
 

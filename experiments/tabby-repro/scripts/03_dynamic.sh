@@ -25,9 +25,9 @@ trap cleanup EXIT
 # 1) place the harness as a workspace member
 rm -rf "$HARNESS_DIR"
 cp -R "$KIT/harness" "$HARNESS_DIR"
-# point the harness at this AFG_ROOT's afg-runtime (single source of truth), so
+# point the harness at this AFG_ROOT's afg_runtime (single source of truth), so
 # the kit is not tied to the absolute path baked into harness/Cargo.toml.
-sed -i '' "s#^afg-runtime = .*#afg-runtime = { path = \"$AFG_ROOT/afg_prototype/afg-runtime\" }#" "$HARNESS_DIR/Cargo.toml"
+sed -i '' "s#^afg_runtime = .*#afg_runtime = { path = \"$AFG_ROOT/afg_prototype/afg_runtime\" }#" "$HARNESS_DIR/Cargo.toml"
 cp "$TABBY/Cargo.toml" "$BAK"
 if ! grep -q 'afg_tabby_harness' "$TABBY/Cargo.toml"; then
   # BSD sed (macOS). Insert the member right after `members = [`.

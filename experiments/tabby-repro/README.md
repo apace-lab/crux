@@ -8,7 +8,7 @@ assistant) and shows both:
 2. **Dynamic**: two users through tabby's **real** database code produce a
    cross-user data leak that `afg_observe` detects (overlap + leak).
 
-See `results/RESULTS.md` for the numbers captured on 2026-09-09, and
+See `results/RESULTS.md` for the AFG output and data leaks captured on 2026-09-09, and
 `results/trace.jsonl` for the exact AFG trace that run produced.
 
 Tabby is the strongest real-world MUMP target found: its auth (`jsonwebtoken` +
@@ -34,7 +34,7 @@ Bundled in this kit: the two-user harness, the scripts, and the captured
 
 Paths are absolute and configurable; the kit does NOT require tabby and AFG to be
 siblings. The only two knobs that matter are `$AFG_ROOT` and `$TABBY` (see
-`scripts/config.sh`); `03_dynamic.sh` rewrites the harness's afg-runtime path from
+`scripts/config.sh`); `03_dynamic.sh` rewrites the harness's afg_runtime path from
 `$AFG_ROOT` automatically. Note that AFG's own internal layout is unchanged:
 `afg_prototype` still path-depends on `../rail-rs`, so those stay
 siblings inside the AFG repo as they already are.
@@ -54,8 +54,9 @@ siblings inside the AFG repo as they already are.
 - A **tabby checkout** at `$TABBY` (default `/Users/sanjib/codes/apace_lab/tabby`),
   `cargo fetch`-ed. Tabby needs no nightly features; `cargo +nightly` in its
   Makefile is only for formatting.
+- Add the **absolute path** of your `afg_prototype/afg_runtime` to `afg-demp/Cargo.toml`. 
 
-All paths are configurable in `scripts/config.sh` (or via env: `AFG_ROOT`,
+All other paths are configurable in `scripts/config.sh` (or via env: `AFG_ROOT`,
 `TABBY`, `LLVM_SYS_191_PREFIX`, `RUST`, `DB`).
 
 ## Run it
@@ -72,7 +73,7 @@ Outputs land in `out/` (gitignored): `static/instrumentation.json`, `static.log`
 
 To view the dynamic result in the dashboard:
 ```sh
-cd ../../afg-dashboard
+cd ../../afg_dashboard
 cargo run -- --trace ../experiments/tabby-repro/out/trace.jsonl   # http://127.0.0.1:8090
 ```
 
@@ -114,5 +115,5 @@ which splits tabby's **multi-line** sqlx method chains
 (`...\n.fetch_all(&self.pool)\n.await?`). The fix is to insert before the
 enclosing statement, not the call line. Until then, the dynamic result uses the
 harness above (which marks the shared store by hand, guided by AFG's static
-findings). The workspace-aware afg-runtime injection needed for a cargo workspace
+findings). The workspace-aware afg_runtime injection needed for a cargo workspace
 is already in `afg_instrument`.

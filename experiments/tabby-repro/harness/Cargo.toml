@@ -3,7 +3,7 @@
 # `version.workspace = true`, so the harness must build inside that workspace).
 #
 # The tabby-db path is relative to tabby/afg_tabby_harness/ (where it is copied).
-# The afg-runtime path is absolute; adjust if AFG_ROOT differs from the default.
+# The afg_runtime path is absolute; adjust if AFG_ROOT differs from the default.
 [package]
 name = "afg_tabby_harness"
 version = "0.0.0"
@@ -12,4 +12,4 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tabby-db = { path = "../ee/tabby-db", features = ["testutils"] }
-afg-runtime = { path = "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/afg-runtime" }
+afg_runtime = { path = "$PATH-TO-YOUR/afg_prototype/afg_runtime" }
