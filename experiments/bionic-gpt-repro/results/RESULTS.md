@@ -1,81 +1,46 @@
-# bionic-gpt: does it leak conversations across users?
+# bionic-gpt: live-app run
 
-Short answer: no. A second logged-in user cannot read someone else's chat
-conversation. bionic-gpt is a clean negative case for AFG (a real app that gets
-access control right), which we use as the contrast to tabby (which leaks).
-
-Run date: 2026-09-09 (re-confirmed while building the dynamic run 2026-09-16).
+The real bionic-gpt deployment, driven with two users. Target: bionic-gpt commit
+`6a82275` (2026-07-24). Run date 2026-09-09, re-confirmed 2026-09-16. Access
+control here is Postgres row-level security plus an in-query ownership predicate,
+a different mechanism from AppFlowy (casbin) and tabby (no check).
 
 ## What we found
 
-alice creates a conversation and sends a message. bob then asks for that same
-conversation by its id. bob gets an empty page, not alice's message. alice, of
-course, sees her own message. So the shared chat store is not exposed across
-users.
-
-This is the opposite of tabby, where a second user who supplies another user's
-thread id is served that thread's messages.
-
-## How it happens
-
-Two guards, both keyed to the user making the request:
-
-1. Every request that touches the console goes through
-   `authz::get_permisisons` (crates/db/authz.rs) before any query runs. That
-   function does `SET LOCAL row_level_security.user_id = <the user's id>`, which
-   sets what `current_app_user()` returns for the rest of the transaction.
-
-2. The query that loads chats (crates/db/queries/chats.sql) has the ownership
-   check written into the SQL itself:
-
-   ```sql
-   WHERE
-       conversation_id IN (SELECT id FROM llm.conversations WHERE user_id = current_app_user())
-   AND
-       conversation_id = :conversation_id
-   ```
-
-So the read is filtered to conversations the current user owns, and Postgres
-row-level security backs it up. When bob asks for alice's conversation,
-`current_app_user()` is bob, the subquery returns nothing, and he gets zero rows.
-In AFG terms: the read of the shared chat store is dominated on every path by an
-ownership check for the current user, so the leak invariant never fires.
-
-## How we tested it
-
-Against the real deployment, not a stub. bionic's own docker-compose (postgres,
-migrations, rag-engine, the app on :3000), with `DANGER_JWT_OVERRIDE` unset so
-the real reverse-proxy auth path is exercised (X-Forwarded-User /
-X-Forwarded-Email). Two users, alice and bob, each on their own team, auto
-registered on first authenticated request.
-
-The stock compose ships no model or prompt, and the console refuses to render
-without one, so we seeded one model plus one Company-visible prompt first. That
-is deployment config an admin normally adds; it is not the security boundary.
-
-We drove it two ways and they agree:
-
-HTTP (the real request path):
-
-| who   | request                              | result                       |
-| ----- | ------------------------------------ | ---------------------------- |
-| alice | GET her own conversation             | 200, her message is present  |
-| bob   | GET alice's conversation (his team)  | 200, empty, message absent   |
-| bob   | GET alice's conversation (her team)  | 422, team check rejects him  |
-
-SQL (running the exact chats predicate under each user's RLS binding):
+A second logged-in user cannot read another user's chat conversation. alice
+creates a conversation with a message; bob then asks for that conversation by id
+and gets an empty page, not alice's message. alice sees her own message. So the
+shared chat store is not exposed across users.
 
 ```
-alice (current_app_user = 2): 1 row
-bob   (current_app_user = 3): 0 rows
+alice  GET her own conversation             200, her message present
+bob    GET alice's conversation (his team)  200, empty, message absent
+bob    GET alice's conversation (her team)  422, team check rejects him
 ```
+
+What it means: two guards, both keyed to the requesting user. Every console
+request runs `authz::get_permisisons` (crates/db/authz.rs) before any query, and
+that does `SET LOCAL row_level_security.user_id = <the user's id>`, which sets
+what `current_app_user()` returns. The chats query (crates/db/queries/chats.sql)
+then carries the ownership check in the SQL:
+
+```sql
+WHERE conversation_id IN (SELECT id FROM llm.conversations WHERE user_id = current_app_user())
+  AND conversation_id = :conversation_id
+```
+
+So when bob asks for alice's conversation, `current_app_user()` is bob, the
+subquery returns nothing, and he gets zero rows. The shared read is dominated on
+every path by an ownership check for the current user. Confirmed at the SQL layer
+too: the same predicate returns 1 row for alice (user 2), 0 rows for bob (user 3).
 
 ## How to reproduce
 
-Bring bionic up from infra-as-code/docker-compose.yml with DANGER_JWT_OVERRIDE
-unset, seed a model + a Company-visible Model prompt, then:
-
 ```sh
+# bring bionic up from infra-as-code/docker-compose.yml, DANGER_JWT_OVERRIDE unset
+# (so the real X-Forwarded-User / X-Forwarded-Email auth path runs)
+# seed one model + one Company-visible Model prompt (the console needs a prompt)
+
 A=(-H "X-Forwarded-User: alice-sub" -H "X-Forwarded-Email: alice@acme.org")
 B=(-H "X-Forwarded-User: bob-sub"   -H "X-Forwarded-Email: bob@acme.org")
 
@@ -88,4 +53,6 @@ curl -s "${A[@]}" http://localhost:3000/o/gbHJdm/console/1 | grep -c ALICE_SECRE
 curl -s "${B[@]}" http://localhost:3000/o/EfhxLZ/console/1 | grep -c ALICE_SECRET   # 0
 ```
 
-The dynamic (instrumented) run of the same app is written up in dynamic.md.
+Expected: alice sees her message, bob does not.
+
+The instrumented (dynamic) run of the same app is in dynamic.md.

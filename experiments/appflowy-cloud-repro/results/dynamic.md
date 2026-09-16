@@ -1,100 +1,79 @@
-# AppFlowy-Cloud: the instrumented dynamic run (AFG catches a real leak)
+# AppFlowy-Cloud: instrumented dynamic run
 
-This is the dynamic half of the AppFlowy experiment, and it is the most useful
-result of the three apps. We build AppFlowy-Cloud from source, add AFG probes to
-the real handlers, run it with two real users, and AFG's trace catches an actual
-cross-user document leak on one code path while correctly clearing the other. Two
-reads of the same shared store, one guarded and one not, and AFG tells them apart.
-
-Run date: 2026-09-16.
+AppFlowy-Cloud built from source, instrumented with AFG probes, run with two real
+users. Target: AppFlowy-Cloud commit `c5bcfd3` (2026-09-11). Run date 2026-09-16.
 
 ## What we found
 
-alice has a document. bob is not in her workspace. bob asks for alice's document
-two ways:
+Two endpoints read the same collab (document) store; one checks access, the other
+does not.
 
-- through the single-document endpoint (collab/{id}): refused, casbin blocks him.
-- through the batch endpoint (collab_list): served. bob gets 4393 bytes of
-  alice's document.
+- `GET /api/workspace/{ws}/collab/{id}` (single): calls casbin
+  `enforce_action(Read)` before it reads. A non-member is refused (`1012`).
+- `GET /api/workspace/{ws}/collab_list` (batch): calls no check. A non-member is
+  served the document.
 
-So the batch path leaks. AFG's trace and verdict pick this up: it records bob
-reading a document that alice owns and being served real bytes, and reports one
-confirmed leak. bob's blocked single-get shows up in the trace as an auth event
-with no read after it, because casbin returned before any read happened, so AFG
-does not flag that path.
+Concretely: alice owns document `WS`; bob is not in alice's workspace. bob's
+single-get is refused; bob's batch-get returns 4393 bytes of alice's document.
+In plain terms: any logged-in user can read another user's document through the
+batch endpoint.
 
-## How it happens
-
-The two paths differ in one thing: whether they call casbin.
-
-- The single-get path (get_collab_handler -> get_full_encode_collab) calls
-  `enforce_action(Read)` before it reads. bob fails that, so nothing is served.
-- The batch path (batch_get_collab_handler -> batch_get_collab) does not. In this
-  source checkout `batch_get_collab` even takes the user id as `_uid` (unused),
-  there is no per-object check, and there is no access-control middleware in front
-  of the route. So it reads and returns whatever object ids you ask for.
-
-That is exactly the kind of bug AFG is built to find: a read of a shared resource
-that is not dominated by an ownership check for the current user. casbin works
-fine; this path just forgot to call it.
-
-## How we tested it
-
-Built appflowy_cloud from the source checkout (commit c5bcfd3) in AppFlowy's own
-build image (lukemathwalker/cargo-chef:latest-rust-1.86, SQLX_OFFLINE=true, with
-protobuf-compiler/lld/clang). The source build has no seat license, so two real
-users sign up and provision through the real gotrue flow, no seeding needed this
-time.
-
-We then ran that binary as the appflowy_cloud service (a compose override swaps
-the image for the build base and runs /target/debug/appflowy_cloud from the build
-volume, with AFG_TRACE_PATH set) against the real backing services (postgres,
-redis, gotrue, minio, nginx), casbin on.
-
-The probe is a small module in the real crate (src/afg_probe.rs) plus calls in
-src/api/workspace.rs. The principal is the request's uid, the resource is
-collab:<object_id>, the count is bytes served. The single-get handler records a
-read only after the casbin check passes; the batch handler records a read for
-each object it actually serves.
-
-Trace (results/trace.jsonl):
+From the trace the instrumented app wrote (`results/trace.jsonl`):
 
 ```
 auth   alice
-read   collab:WS  count 4393    (alice, her own, batch)
-auth   bob                       (bob single-get: casbin blocked before the read, no read event)
+read   collab:WS  count 4393     alice, own document (batch)
+auth   bob                        single-get: casbin refused before the read, no read event
 auth   bob
-read   collab:WS  count 4393    (bob, batch, alice's document)
+read   collab:WS  count 4393     bob served alice's document (batch)
 ```
 
-Verdict (afg_observe, cargo run --example analyze):
+`afg_observe` over that trace:
 
 ```
-coarse overlap: alice <-> bob on the collab store node
-resource-linked leak verdict: 1 confirmed leak
-  bob read alice's collab:WS and was served 4393 rows
+overlap: alice <-> bob on the collab store node
+resource-linked leak: 1   bob read alice's collab:WS, served 4393 bytes
 ```
 
-Same node, same document, opposite verdicts on the two paths.
+What it means: both users reach the same store node and the same document, but the
+per-instance verdict fires only for the batch read. bob's single-get returned no
+bytes (the casbin check dominated it), his batch read returned alice's bytes (no
+check). That is the bug AFG targets: a read of a shared resource that is not
+guarded for the requesting user. In this checkout `batch_get_collab` takes the
+user id as `_uid` (unused), does no per-object check, and has no access-control
+middleware in front of the route.
 
 ## How to reproduce
 
-1. Build appflowy_cloud from the source checkout in the cargo-chef rust-1.86
-   image, SQLX_OFFLINE=true, apt install protobuf-compiler lld clang,
-   `cargo build --bin appflowy_cloud`.
-2. Add the probe module and the handler calls (see the diff in src/api/workspace.rs
-   and src/afg_probe.rs), rebuild.
-3. Bring up the stack with a compose override that runs your built binary as the
-   appflowy_cloud service and sets AFG_TRACE_PATH.
-4. Sign up + verify alice and bob (no seat limit on the source build). alice reads
-   her document, bob reads it via single-get (blocked) and via collab_list (leak).
-5. Copy the trace out of the container and run
-   `cargo run --example analyze -- <trace.jsonl>` from afg_observe.
+Build from source in AppFlowy's own build image, run that binary as the app
+service, drive two users.
 
-## Honest about the version
+```sh
+# 1) build (rustc 1.86 / LLVM 19; SQLX_OFFLINE=true; apt: protobuf-compiler lld clang)
+cargo build --bin appflowy_cloud
 
-This leak is in the source checkout (commit c5bcfd3). The newer released image
-(the one in RESULTS.md) has since added a check that blocks bob on the batch path
-too. So this is a real class of bug, a shared read that skips its ownership check,
-that AFG catches in a real version and that upstream later fixed. AFG would have
-flagged it before the fix landed.
+# 2) add the probe and the handler calls, then rebuild:
+#    - src/afg_probe.rs                     (writes the AFG trace)
+#    - src/api/workspace.rs                 (auth + read in the two collab handlers)
+
+# 3) bring the stack up with a compose override that runs the built binary as the
+#    appflowy_cloud service and sets AFG_TRACE_PATH (backing services: postgres,
+#    redis, gotrue, minio, nginx; casbin on). minio: point at quay.io/minio/minio.
+
+# 4) sign up + verify alice and bob (source build has no seat limit), then:
+GET /api/workspace/{WS}/collab/{WS}      # single -> 1012 refused
+GET /api/workspace/{WS}/collab_list      # batch  -> 200, alice's bytes (leak)
+
+# 5) copy the trace out of the container and analyze it
+cargo run --example analyze -- results/trace.jsonl   # from afg_observe
+```
+
+Expected: single-get refused, batch-get served, and one confirmed
+resource-linked leak (bob read alice's document).
+
+## Version note
+
+The leak is in commit `c5bcfd3`. A newer released image adds the check and blocks
+bob on the batch path too (see the prebuilt-image run in RESULTS.md). So this is a
+real bug in that version, since fixed upstream; AFG would have caught it before
+the fix.
