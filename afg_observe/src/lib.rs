@@ -27,6 +27,10 @@ pub struct AccessObservation {
     pub access: String,
     pub function_id: Option<u64>,
     pub site: Option<u64>,
+    // Resource INSTANCE the access touched (e.g. "conversation:1"), and the rows it
+    // yielded. Present when the site is instrumented with the resource-linked form.
+    pub resource: Option<String>,
+    pub count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -43,11 +47,27 @@ pub struct ScopeOverlap {
     pub shared_nodes: BTreeSet<u64>,
 }
 
+/// A confirmed cross-user leak on a single resource INSTANCE: `reader` (who does
+/// not own it) read `resource` and was served `rows` rows that belong to `owner`.
+/// This refines the coarse PANode overlap: an overlap on a node is only a real
+/// leak when some principal actually read another principal's instance data. A
+/// read that returns zero rows was dominated by an ownership check and produces
+/// no ResourceLeak (the positive-control case).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceLeak {
+    pub resource: String,
+    pub panode: u64,
+    pub owner: String,
+    pub reader: String,
+    pub rows: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ObservationResult {
     pub accesses: Vec<AccessObservation>,
     pub principals: BTreeMap<String, PrincipalScope>,
     pub overlaps: Vec<ScopeOverlap>,
+    pub resource_leaks: Vec<ResourceLeak>,
 }
 
 pub fn run_observation(cfg: &ObservationConfig) -> Result<()> {
@@ -83,6 +103,7 @@ pub fn analyze_traces(paths: &[PathBuf]) -> Result<ObservationResult> {
         if path.exists() { parse_jsonl_trace(path, &mut out)?; }
     }
     compute_overlaps(&mut out);
+    compute_resource_leaks(&mut out);
     Ok(out)
 }
 
@@ -118,6 +139,8 @@ fn parse_jsonl_trace(path: &Path, out: &mut ObservationResult) -> Result<()> {
             access: access.clone(),
             function_id,
             site: v.get("site").and_then(Value::as_u64),
+            resource: v.get("resource").and_then(Value::as_str).map(str::to_string),
+            count: v.get("count").and_then(Value::as_u64),
         };
 
         let scope = out.principals.entry(principal).or_default();
@@ -150,5 +173,107 @@ fn compute_overlaps(out: &mut ObservationResult) {
                 });
             }
         }
+    }
+}
+
+/// Resource-linked verdict: for each resource INSTANCE, the owner is the principal
+/// of the first observed write (or, absent a write, the first accessor). A read of
+/// that instance by any other principal that returns rows is a confirmed leak. A
+/// read that returns no rows was dominated by an ownership check and is not a leak,
+/// even though both principals reach the same PANode (the positive-control case).
+fn compute_resource_leaks(out: &mut ObservationResult) {
+    let mut by_resource: BTreeMap<String, Vec<AccessObservation>> = BTreeMap::new();
+    for a in &out.accesses {
+        if let Some(res) = &a.resource {
+            by_resource.entry(res.clone()).or_default().push(a.clone());
+        }
+    }
+
+    for (resource, mut accesses) in by_resource {
+        accesses.sort_by_key(|a| a.seq.unwrap_or(u64::MAX));
+        let owner = accesses
+            .iter()
+            .find(|a| a.access.eq_ignore_ascii_case("write"))
+            .or_else(|| accesses.first())
+            .map(|a| a.principal.clone());
+        let Some(owner) = owner else { continue };
+
+        for a in &accesses {
+            if a.access.eq_ignore_ascii_case("read")
+                && a.principal != owner
+                && a.count.unwrap_or(0) > 0
+            {
+                out.resource_leaks.push(ResourceLeak {
+                    resource: resource.clone(),
+                    panode: a.panode,
+                    owner: owner.clone(),
+                    reader: a.principal.clone(),
+                    rows: a.count.unwrap_or(0),
+                });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acc(seq: u64, principal: &str, access: &str, resource: &str, count: u64) -> AccessObservation {
+        AccessObservation {
+            seed: None,
+            seq: Some(seq),
+            principal: principal.to_string(),
+            panode: 7000,
+            access: access.to_string(),
+            function_id: None,
+            site: None,
+            resource: Some(resource.to_string()),
+            count: Some(count),
+        }
+    }
+
+    // Positive control (bionic-gpt shape): alice owns conversation:1, bob's read of
+    // it returns 0 rows (dominated by the ownership check). No leak, even though both
+    // reach node 7000.
+    #[test]
+    fn dominated_read_is_not_a_leak() {
+        let mut out = ObservationResult::default();
+        out.accesses = vec![
+            acc(1, "alice", "write", "conversation:1", 1),
+            acc(2, "alice", "read", "conversation:1", 1),
+            acc(3, "bob", "read", "conversation:1", 0),
+        ];
+        compute_resource_leaks(&mut out);
+        assert!(out.resource_leaks.is_empty(), "positive control must have no leak");
+    }
+
+    // Negative control (tabby shape): alice owns thread:9, bob reads it and is served
+    // rows. Confirmed cross-user leak.
+    #[test]
+    fn cross_user_read_with_rows_is_a_leak() {
+        let mut out = ObservationResult::default();
+        out.accesses = vec![
+            acc(1, "alice", "write", "thread:9", 1),
+            acc(2, "bob", "read", "thread:9", 3),
+        ];
+        compute_resource_leaks(&mut out);
+        assert_eq!(out.resource_leaks.len(), 1);
+        let leak = &out.resource_leaks[0];
+        assert_eq!(leak.owner, "alice");
+        assert_eq!(leak.reader, "bob");
+        assert_eq!(leak.rows, 3);
+    }
+
+    // The owner reading their own instance is never a leak.
+    #[test]
+    fn owner_read_is_not_a_leak() {
+        let mut out = ObservationResult::default();
+        out.accesses = vec![
+            acc(1, "alice", "write", "conversation:1", 1),
+            acc(2, "alice", "read", "conversation:1", 5),
+        ];
+        compute_resource_leaks(&mut out);
+        assert!(out.resource_leaks.is_empty());
     }
 }

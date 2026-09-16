@@ -1,0 +1,6 @@
+{"duration_ms":null,"event":"auth","method":"jwt","permissions":[],"principal":"alice-sub","seq":1}
+{"count":1,"event":"access","file":"crates/web-server/handlers/console/send_message.rs","kind":"Write","line":139,"node":7100,"principal":"alice-sub","resource":"conversation:2","seq":2}
+{"duration_ms":null,"event":"auth","method":"jwt","permissions":[],"principal":"alice-sub","seq":3}
+{"count":1,"event":"access","file":"crates/web-server/handlers/console/conversation.rs","kind":"Read","line":38,"node":7100,"principal":"alice-sub","resource":"conversation:2","seq":4}
+{"duration_ms":null,"event":"auth","method":"jwt","permissions":[],"principal":"bob-sub","seq":5}
+{"count":0,"event":"access","file":"crates/web-server/handlers/console/conversation.rs","kind":"Read","line":38,"node":7100,"principal":"bob-sub","resource":"conversation:2","seq":6}

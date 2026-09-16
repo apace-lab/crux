@@ -142,6 +142,17 @@ pub enum Event {
         node: PANodeId,
         kind: AccessKind,
         function_id: Option<FunctionId>,
+        // Resource INSTANCE key (e.g. "conversation:1"), when the site can name the
+        // specific row/object it touches. This is what lets afg_observe link a write
+        // and a read on the SAME resource and decide a leak per instance, instead of
+        // flagging every principal that reaches the resource's PANode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+        // Rows/items the access actually yielded. A read that returns 0 was dominated
+        // by an ownership check (no data flowed); a read that returns > 0 did serve
+        // the instance's data.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u64>,
         file: &'static str,
         line: u32,
     },
@@ -230,12 +241,31 @@ pub fn access(
     file: &'static str,
     line: u32,
 ) {
+    access_resource(node, kind, function_id, None, None, file, line);
+}
+
+/// Like [`access`] but also records the resource INSTANCE the site touched and how
+/// many rows/items it yielded. afg_observe uses these to decide a cross-user leak
+/// per instance: a read of a resource by a principal that does not own it, that
+/// returns rows, is a leak; a read that returns none was dominated by an ownership
+/// check and is not.
+pub fn access_resource(
+    node: PANodeId,
+    kind: AccessKind,
+    function_id: Option<FunctionId>,
+    resource: Option<String>,
+    count: Option<u64>,
+    file: &'static str,
+    line: u32,
+) {
     let ctx = current_context();
     record(Event::Access {
         principal: ctx.principal,
         node,
         kind,
         function_id,
+        resource,
+        count,
         file,
         line,
     });
@@ -414,6 +444,29 @@ macro_rules! afg_access {
     }};
     (node = $node:expr, kind = $kind:expr, function = $function_id:expr $(,)?) => {{
         $crate::access($node, $kind, Some($function_id), file!(), line!());
+    }};
+    // Resource-linked variants: name the instance touched and the rows it yielded.
+    (node = $node:expr, kind = $kind:expr, resource = $resource:expr, count = $count:expr $(,)?) => {{
+        $crate::access_resource(
+            $node,
+            $kind,
+            None,
+            Some(($resource).to_string()),
+            Some($count as u64),
+            file!(),
+            line!(),
+        );
+    }};
+    (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr, count = $count:expr $(,)?) => {{
+        $crate::access_resource(
+            $node,
+            $kind,
+            Some($function_id),
+            Some(($resource).to_string()),
+            Some($count as u64),
+            file!(),
+            line!(),
+        );
     }};
 }
 
