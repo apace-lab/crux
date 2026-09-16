@@ -52,9 +52,10 @@ service, drive two users.
 # 1) build (rustc 1.86 / LLVM 19; SQLX_OFFLINE=true; apt: protobuf-compiler lld clang)
 cargo build --bin appflowy_cloud
 
-# 2) add the probe and the handler calls, then rebuild:
-#    - src/afg_probe.rs                     (writes the AFG trace)
-#    - src/api/workspace.rs                 (auth + read in the two collab handlers)
+# 2) apply the AFG instrumentation (probe module + auth/read calls in the two
+#    collab handlers), then rebuild. On a clean checkout of commit c5bcfd3:
+#      git apply .../appflowy-cloud-repro/instrumentation.patch
+#    (adds src/afg_probe.rs and edits src/lib.rs, src/api/workspace.rs)
 
 # 3) bring the stack up with a compose override that runs the built binary as the
 #    appflowy_cloud service and sets AFG_TRACE_PATH (backing services: postgres,

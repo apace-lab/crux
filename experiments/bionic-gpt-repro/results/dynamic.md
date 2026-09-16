@@ -45,11 +45,10 @@ fire.
 # (cornucopia typechecks queries against the real schema at build time)
 cargo build --bin web-server
 
-# add the probe and the three calls, then rebuild:
-#   - crates/web-server/afg_probe.rs
-#   - crates/web-server/jwt.rs                              (auth)
-#   - crates/web-server/handlers/console/send_message.rs   (write)
-#   - crates/web-server/handlers/console/conversation.rs   (read)
+# apply the AFG instrumentation, then rebuild. On a clean checkout of commit 6a82275:
+#   git apply .../bionic-gpt-repro/instrumentation.patch
+# (adds crates/web-server/afg_probe.rs and edits main.rs, jwt.rs [auth],
+#  handlers/console/send_message.rs [write], handlers/console/conversation.rs [read])
 
 # run the binary with APP_DATABASE_URL set, DANGER_JWT_OVERRIDE unset,
 # AFG_TRACE_PATH set. alice creates + reads a conversation, bob reads it.

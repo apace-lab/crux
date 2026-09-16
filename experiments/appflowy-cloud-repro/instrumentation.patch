@@ -1,0 +1,158 @@
+diff --git a/src/afg_probe.rs b/src/afg_probe.rs
+new file mode 100644
+index 0000000..5d08eb3
+--- /dev/null
++++ b/src/afg_probe.rs
+@@ -0,0 +1,84 @@
++// AFG dynamic instrumentation probe.
++//
++// Added for the AFG (Access Flow Guard) access-flow experiment. Emits the AFG
++// JSONL trace that afg_observe analyzes, at the sites AFG cares about (the auth
++// point and the shared collab-store accesses). The real app logic is unchanged.
++//
++// Reads AFG_TRACE_PATH (a fresh file per process start); when unset, every call
++// is a cheap no-op, so a normal build is unaffected.
++use serde_json::json;
++use std::fs::{File, OpenOptions};
++use std::io::Write;
++use std::sync::{Mutex, OnceLock};
++
++// PANode label for the shared collab store (af_collab). AFG's static analysis
++// flags this as the resource reached by more than one principal; the dynamic
++// trace tags each access to it so afg_observe can decide leaks per collab object.
++pub const NODE_COLLAB: u64 = 7200;
++
++struct Trace {
++    file: Mutex<File>,
++    seq: Mutex<u64>,
++}
++
++static TRACE: OnceLock<Option<Trace>> = OnceLock::new();
++
++fn trace() -> Option<&'static Trace> {
++    TRACE
++        .get_or_init(|| {
++            let path = std::env::var("AFG_TRACE_PATH").ok()?;
++            let file = OpenOptions::new()
++                .create(true)
++                .write(true)
++                .truncate(true)
++                .open(path)
++                .ok()?;
++            Some(Trace {
++                file: Mutex::new(file),
++                seq: Mutex::new(0),
++            })
++        })
++        .as_ref()
++}
++
++fn emit(mut event: serde_json::Value) {
++    if let Some(t) = trace() {
++        let seq = {
++            let mut s = t.seq.lock().expect("afg seq lock");
++            *s += 1;
++            *s
++        };
++        event["seq"] = json!(seq);
++        let mut f = t.file.lock().expect("afg trace lock");
++        let _ = writeln!(f, "{}", event);
++    }
++}
++
++/// Record the authenticated principal established at the request auth point.
++pub fn auth(principal: &str, method: &str) {
++    emit(json!({
++        "event": "auth",
++        "principal": principal,
++        "method": method,
++        "permissions": [],
++        "duration_ms": null,
++    }));
++}
++
++/// Record an access to the shared collab store. `resource` names the instance
++/// touched (e.g. "collab:<object_id>") and `count` the bytes/rows it actually
++/// yielded, so a read dominated by a casbin ownership check (which returns before
++/// any data is read, count 0) is distinguishable from one that served the data.
++#[allow(clippy::too_many_arguments)]
++pub fn access(principal: &str, node: u64, kind: &str, resource: &str, count: u64, file: &str, line: u32) {
++    emit(json!({
++        "event": "access",
++        "principal": principal,
++        "node": node,
++        "kind": kind,
++        "resource": resource,
++        "count": count,
++        "file": file,
++        "line": line,
++    }));
++}
+diff --git a/src/api/workspace.rs b/src/api/workspace.rs
+index da06efa..4b41a0a 100644
+--- a/src/api/workspace.rs
++++ b/src/api/workspace.rs
+@@ -1240,6 +1240,7 @@ async fn get_collab_handler(
+     .validate()
+     .map_err(|err| AppError::InvalidRequest(err.to_string()))?;
+ 
++  crate::afg_probe::auth(&uid.to_string(), "gotrue");
+   let encode_collab = state
+     .collab_storage
+     .get_full_encode_collab(
+@@ -1252,6 +1253,17 @@ async fn get_collab_handler(
+     .map_err(AppResponseError::from)?
+     .encoded_collab;
+ 
++  // Reached only after the casbin ownership check passed; the read served data.
++  crate::afg_probe::access(
++    &uid.to_string(),
++    crate::afg_probe::NODE_COLLAB,
++    "Read",
++    &format!("collab:{}", params.object_id),
++    encode_collab.doc_state.len() as u64,
++    file!(),
++    line!(),
++  );
++
+   let resp = CollabResponse {
+     encode_collab,
+     object_id: params.object_id,
+@@ -1920,12 +1932,28 @@ async fn batch_get_collab_handler(
+     .get_user_uid(&user_uuid)
+     .await
+     .map_err(AppResponseError::from)?;
++  crate::afg_probe::auth(&uid.to_string(), "gotrue");
+   let result = BatchQueryCollabResult(
+     state
+       .collab_storage
+       .batch_get_collab(&uid, workspace_id, payload.into_inner().0)
+       .await,
+   );
++  // This batch path performs no per-object ownership check, so whatever it served
++  // is recorded as a read of that collab instance by the current principal.
++  for (object_id, res) in result.0.iter() {
++    if let database_entity::dto::QueryCollabResult::Success { encode_collab_v1 } = res {
++      crate::afg_probe::access(
++        &uid.to_string(),
++        crate::afg_probe::NODE_COLLAB,
++        "Read",
++        &format!("collab:{}", object_id),
++        encode_collab_v1.len() as u64,
++        file!(),
++        line!(),
++      );
++    }
++  }
+   Ok(Json(AppResponse::Ok().with_data(result)))
+ }
+ 
+diff --git a/src/lib.rs b/src/lib.rs
+index e2e9f67..7959495 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,4 @@
++pub mod afg_probe;
+ pub mod api;
+ pub mod application;
+ pub mod biz;

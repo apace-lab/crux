@@ -1,0 +1,181 @@
+diff --git a/crates/web-server/afg_probe.rs b/crates/web-server/afg_probe.rs
+new file mode 100644
+index 0000000..136e740
+--- /dev/null
++++ b/crates/web-server/afg_probe.rs
+@@ -0,0 +1,88 @@
++// AFG dynamic instrumentation probe.
++//
++// Added for the AFG (Access Flow Guard) access-flow experiment. This is the probe
++// the AFG instrumenter injects at the sites the static analysis flags (the auth
++// point and the shared data-store accesses). It is added by hand to the real
++// bionic source here so the unmodified app logic runs and produces the AFG JSONL
++// trace that afg_observe analyzes.
++//
++// It reads AFG_TRACE_PATH (a fresh file is written per process start). When the
++// variable is unset every call is a cheap no-op, so a normal build carries no
++// behavioural change.
++use serde_json::json;
++use std::fs::{File, OpenOptions};
++use std::io::Write;
++use std::sync::{Mutex, OnceLock};
++
++// PANode label for the shared conversation/chat store (llm.chats). AFG's static
++// analysis flags this as the resource reached by more than one principal; the
++// dynamic trace tags each access to it so afg_observe can decide leaks per
++// conversation instance.
++pub const NODE_CHATS: u64 = 7100;
++
++struct Trace {
++    file: Mutex<File>,
++    seq: Mutex<u64>,
++}
++
++static TRACE: OnceLock<Option<Trace>> = OnceLock::new();
++
++fn trace() -> Option<&'static Trace> {
++    TRACE
++        .get_or_init(|| {
++            let path = std::env::var("AFG_TRACE_PATH").ok()?;
++            let file = OpenOptions::new()
++                .create(true)
++                .write(true)
++                .truncate(true)
++                .open(path)
++                .ok()?;
++            Some(Trace {
++                file: Mutex::new(file),
++                seq: Mutex::new(0),
++            })
++        })
++        .as_ref()
++}
++
++fn emit(mut event: serde_json::Value) {
++    if let Some(t) = trace() {
++        let seq = {
++            let mut s = t.seq.lock().expect("afg seq lock");
++            *s += 1;
++            *s
++        };
++        event["seq"] = json!(seq);
++        let mut f = t.file.lock().expect("afg trace lock");
++        let _ = writeln!(f, "{}", event);
++    }
++}
++
++/// Record the authenticated principal established at the request auth point.
++pub fn auth(principal: &str, method: &str) {
++    emit(json!({
++        "event": "auth",
++        "principal": principal,
++        "method": method,
++        "permissions": [],
++        "duration_ms": null,
++    }));
++}
++
++/// Record an access to a shared store. `resource` names the instance touched
++/// (e.g. "conversation:1") and `count` the rows it actually yielded, so a read
++/// dominated by an ownership check (count 0) is distinguishable from one that
++/// served the instance's data.
++#[allow(clippy::too_many_arguments)]
++pub fn access(principal: &str, node: u64, kind: &str, resource: &str, count: u64, file: &str, line: u32) {
++    emit(json!({
++        "event": "access",
++        "principal": principal,
++        "node": node,
++        "kind": kind,
++        "resource": resource,
++        "count": count,
++        "file": file,
++        "line": line,
++    }));
++}
+diff --git a/crates/web-server/handlers/console/conversation.rs b/crates/web-server/handlers/console/conversation.rs
+index d28c245..61eeae7 100644
+--- a/crates/web-server/handlers/console/conversation.rs
++++ b/crates/web-server/handlers/console/conversation.rs
+@@ -19,6 +19,7 @@ pub async fn conversation(
+     let mut client = pool.get().await?;
+     let transaction = client.transaction().await?;
+ 
++    let afg_principal = current_user.sub.clone();
+     let (rbac, team_id_num) =
+         authz::get_permisisons(&transaction, &current_user.into(), &team_id).await?;
+ 
+@@ -27,6 +28,16 @@ pub async fn conversation(
+         .all()
+         .await?;
+ 
++    crate::afg_probe::access(
++        &afg_principal,
++        crate::afg_probe::NODE_CHATS,
++        "Read",
++        &format!("conversation:{}", conversation_id),
++        chats.len() as u64,
++        file!(),
++        line!(),
++    );
++
+     let is_tts_disabled = queries::models::models()
+         .bind(&transaction, &ModelType::TextToSpeech)
+         .all()
+diff --git a/crates/web-server/handlers/console/send_message.rs b/crates/web-server/handlers/console/send_message.rs
+index 0c3820a..f49feb8 100644
+--- a/crates/web-server/handlers/console/send_message.rs
++++ b/crates/web-server/handlers/console/send_message.rs
+@@ -101,6 +101,7 @@ pub async fn send_message(
+         let mut client = pool.get().await?;
+         let transaction = client.transaction().await?;
+ 
++        let afg_principal = current_user.sub.clone();
+         let (rbac, team_id_num) =
+             authz::get_permisisons(&transaction, &current_user.into(), &team_id).await?;
+ 
+@@ -128,6 +129,16 @@ pub async fn send_message(
+             .one()
+             .await?;
+ 
++        crate::afg_probe::access(
++            &afg_principal,
++            crate::afg_probe::NODE_CHATS,
++            "Write",
++            &format!("conversation:{}", conversation_id),
++            1,
++            file!(),
++            line!(),
++        );
++
+         // Handle attachments if any
+         handle_attachments(
+             &transaction,
+diff --git a/crates/web-server/jwt.rs b/crates/web-server/jwt.rs
+index 1141d4f..fe70410 100644
+--- a/crates/web-server/jwt.rs
++++ b/crates/web-server/jwt.rs
+@@ -84,6 +84,7 @@ where
+                                         family_name,
+                                     };
+ 
++                                    crate::afg_probe::auth(&authentication.sub, "jwt");
+                                     return Ok(authentication);
+                                 }
+                             }
+@@ -103,6 +104,7 @@ where
+                     family_name: None,
+                 };
+ 
++                crate::afg_probe::auth(&authentication.sub, "jwt");
+                 return Ok(authentication);
+             }
+         }
+diff --git a/crates/web-server/main.rs b/crates/web-server/main.rs
+index 7168df8..56d8b1d 100644
+--- a/crates/web-server/main.rs
++++ b/crates/web-server/main.rs
+@@ -1,3 +1,4 @@
++pub mod afg_probe;
+ pub mod config;
+ pub mod email;
+ pub mod errors;
