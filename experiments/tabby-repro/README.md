@@ -112,12 +112,20 @@ built `afg` binary. Paths are absolute and configurable; the kit does not requir
 tabby and AFG to be siblings. AFG's own layout is unchanged: `afg_prototype` still
 path-depends on `../rail-rs`, so those stay siblings inside the AFG repo.
 
-## Known limitation
+## Note on automated instrumentation (the old blocker, now fixed)
 
-Fully automated instrumentation of tabby (`afg --instrument-only`) does not
-compile yet: the instrumenter inserts its macros before the call line, which
-splits tabby's multi-line sqlx method chains (`...\n.fetch_all(&self.pool)\n
-.await?`). The fix is to insert before the enclosing statement, not the call line.
-Until then the dynamic result uses the harness above, which marks the shared store
-by hand, guided by the static findings. The workspace-aware afg_runtime injection
-needed for a cargo workspace is already in afg_instrument.
+The dynamic result above used a hand-marked harness because automated
+instrumentation (`afg --instrument-only`) used to insert its macros before the
+call line, which split tabby's multi-line sqlx method chains
+(`...\n.fetch_all(&self.pool)\n.await?`) and would not compile.
+
+That is fixed. The instrumenter now inserts before the enclosing statement, not
+the call line (`statement_start` in afg_instrument), so a multi-line chain is
+instrumented as a whole and compiles. It is validated end to end on a multi-line
+version of `rail-rs/examples/demo_data_access` (the full producer -> instrument ->
+build -> observe -> replay pipeline runs clean and still reproduces the leak). It
+bails safely (skips the site, with a note) on the few positions where a statement
+cannot go, such as a match arm expression or an array element. tabby's chains are
+the same pattern, so auto-instrumentation should now handle them; the harness here
+is kept as the captured historical result. The workspace-aware afg_runtime
+injection needed for a cargo workspace was already in afg_instrument.
