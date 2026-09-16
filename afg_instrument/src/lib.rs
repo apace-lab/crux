@@ -181,7 +181,251 @@ pub fn instrument_project(
         }
     }
 
+    // Propagate the principal across tokio::spawn. A spawned task runs on a fresh
+    // task and does NOT inherit task-locals, so without this the principal is lost
+    // in any work a request handler spawns. Wrap the future argument of every
+    // tokio::spawn / tokio::task::spawn in the crates we instrumented (they now
+    // depend on afg-runtime) with afg_runtime::with_current_context(..).
+    let crate_roots: Vec<PathBuf> = if runtime_manifests.is_empty() {
+        vec![dst.to_path_buf()]
+    } else {
+        runtime_manifests
+            .iter()
+            .filter_map(|m| m.parent().map(Path::to_path_buf))
+            .collect()
+    };
+    let mut wrapped_total = 0usize;
+    for root in &crate_roots {
+        for entry in WalkDir::new(root).into_iter().flatten() {
+            if entry.file_type().is_file()
+                && entry.path().extension().and_then(|e| e.to_str()) == Some("rs")
+            {
+                let path = entry.path();
+                let Ok(text) = fs::read_to_string(path) else {
+                    continue;
+                };
+                let (rewritten, n) = wrap_spawns(&text);
+                if n > 0 {
+                    fs::write(path, rewritten)?;
+                    wrapped_total += n;
+                }
+            }
+        }
+    }
+    if wrapped_total > 0 {
+        println!("[instrument] wrapped {wrapped_total} tokio::spawn site(s) with with_current_context");
+    }
+
     Ok(())
+}
+
+/// Wrap the future argument of `tokio::spawn(...)` and `tokio::task::spawn(...)`
+/// with `afg_runtime::with_current_context(...)`, so the spawned task carries the
+/// current principal (task-locals are not inherited across a spawn). Returns the
+/// rewritten source and the number of wraps applied.
+///
+/// Conservative by design: only these two fully-qualified spawns are targeted
+/// (not `spawn_blocking`, which takes a sync closure, nor bare `spawn`); patterns
+/// inside strings/chars/comments are skipped; and a call whose closing paren
+/// cannot be matched, or that is already wrapped, is left untouched.
+fn wrap_spawns(text: &str) -> (String, usize) {
+    const PATTERNS: [&str; 2] = ["tokio::spawn(", "tokio::task::spawn("];
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut i = 0usize;
+    let mut count = 0usize;
+
+    while i < bytes.len() {
+        // Skip over strings / chars / comments verbatim so we never match (or
+        // mis-balance parens) inside them.
+        if let Some(end) = skip_token(bytes, i) {
+            out.push_str(&text[i..end]);
+            i = end;
+            continue;
+        }
+
+        let mut matched = false;
+        for pat in PATTERNS {
+            let p = pat.as_bytes();
+            if bytes[i..].starts_with(p) {
+                // require an identifier boundary before the pattern
+                let boundary = i == 0 || !is_ident_byte(bytes[i - 1]);
+                let open = i + p.len() - 1; // index of the '(' in the pattern
+                if boundary {
+                    if let Some(close) = matching_paren(bytes, open) {
+                        let inner = &text[open + 1..close];
+                        let already = inner
+                            .trim_start()
+                            .starts_with("afg_runtime::with_current_context");
+                        if !already && !inner.trim().is_empty() {
+                            out.push_str(pat); // "...spawn("
+                            out.push_str("afg_runtime::with_current_context(");
+                            out.push_str(inner);
+                            out.push(')'); // close with_current_context
+                            out.push(')'); // close spawn
+                            i = close + 1;
+                            count += 1;
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if matched {
+            continue;
+        }
+
+        // Copy one UTF-8 char and advance.
+        let ch_len = utf8_len(bytes[i]);
+        let end = (i + ch_len).min(bytes.len());
+        out.push_str(&text[i..end]);
+        i = end;
+    }
+
+    (out, count)
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b == b'_' || b.is_ascii_alphanumeric()
+}
+
+fn utf8_len(first: u8) -> usize {
+    match first {
+        b if b < 0x80 => 1,
+        b if b >> 5 == 0b110 => 2,
+        b if b >> 4 == 0b1110 => 3,
+        _ => 4,
+    }
+}
+
+/// If a string, char, or comment token starts at `i`, return the index just past
+/// it; otherwise `None`. Handles line/block (nested) comments, normal/byte/raw
+/// strings, and char literals (but not lifetimes, which contain no parens).
+fn skip_token(bytes: &[u8], i: usize) -> Option<usize> {
+    let n = bytes.len();
+    match bytes[i] {
+        b'/' if i + 1 < n && bytes[i + 1] == b'/' => {
+            let mut j = i + 2;
+            while j < n && bytes[j] != b'\n' {
+                j += 1;
+            }
+            Some(j)
+        }
+        b'/' if i + 1 < n && bytes[i + 1] == b'*' => {
+            let mut j = i + 2;
+            let mut depth = 1;
+            while j + 1 < n && depth > 0 {
+                if bytes[j] == b'/' && bytes[j + 1] == b'*' {
+                    depth += 1;
+                    j += 2;
+                } else if bytes[j] == b'*' && bytes[j + 1] == b'/' {
+                    depth -= 1;
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            Some(if depth == 0 { j } else { n })
+        }
+        b'"' => Some(skip_string(bytes, i + 1)),
+        b'r' | b'b' => skip_raw_or_byte_string(bytes, i),
+        b'\'' => skip_char_literal(bytes, i),
+        _ => None,
+    }
+}
+
+// End of a normal string literal, given the index just after the opening quote.
+fn skip_string(bytes: &[u8], mut j: usize) -> usize {
+    let n = bytes.len();
+    while j < n {
+        match bytes[j] {
+            b'\\' => j += 2,
+            b'"' => return j + 1,
+            _ => j += 1,
+        }
+    }
+    n
+}
+
+// Raw strings (r"..", r#".."#, br"..") and byte strings (b".."). Returns None if
+// `i` is just an identifier starting with r/b (e.g. `redis`, `bob`).
+fn skip_raw_or_byte_string(bytes: &[u8], i: usize) -> Option<usize> {
+    let n = bytes.len();
+    let mut j = i;
+    if bytes[j] == b'b' {
+        j += 1;
+        if j < n && bytes[j] == b'"' {
+            return Some(skip_string(bytes, j + 1)); // byte string b".."
+        }
+    }
+    if j < n && bytes[j] == b'r' {
+        let mut k = j + 1;
+        let mut hashes = 0;
+        while k < n && bytes[k] == b'#' {
+            hashes += 1;
+            k += 1;
+        }
+        if k < n && bytes[k] == b'"' {
+            // raw string: closing is '"' followed by `hashes` '#'
+            let mut m = k + 1;
+            while m < n {
+                if bytes[m] == b'"' && bytes[m + 1..].iter().take(hashes).filter(|&&c| c == b'#').count() == hashes {
+                    return Some(m + 1 + hashes);
+                }
+                m += 1;
+            }
+            return Some(n);
+        }
+    }
+    None
+}
+
+// Char literal like 'a', '(', '\n', '\''. Returns None for lifetimes ('a in a
+// generic), which contain no parens so are safe to treat as ordinary bytes.
+fn skip_char_literal(bytes: &[u8], i: usize) -> Option<usize> {
+    let n = bytes.len();
+    if i + 1 >= n {
+        return None;
+    }
+    if bytes[i + 1] == b'\\' {
+        // ' \ X ... ' : the closing quote is at i+3 or later (past the escape),
+        // so start the search there (this handles '\'' and '\\' correctly).
+        let mut j = i + 3;
+        while j < n && bytes[j] != b'\'' {
+            j += 1;
+        }
+        return if j < n { Some(j + 1) } else { None };
+    }
+    if i + 2 < n && bytes[i + 2] == b'\'' && bytes[i + 1] != b'\'' {
+        return Some(i + 3);
+    }
+    None
+}
+
+// Index of the ')' matching the '(' at `open`, or None if unbalanced.
+fn matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
+    let n = bytes.len();
+    let mut depth = 1usize;
+    let mut j = open + 1;
+    while j < n {
+        if let Some(end) = skip_token(bytes, j) {
+            j = end;
+            continue;
+        }
+        match bytes[j] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j);
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
 }
 
 /// Walk up from `file` to `root`, returning the nearest Cargo.toml that defines a
@@ -328,4 +572,65 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod spawn_wrap_tests {
+    use super::wrap_spawns;
+
+    #[test]
+    fn wraps_simple_and_qualified() {
+        let (out, n) = wrap_spawns("let h = tokio::spawn(fut);");
+        assert_eq!(n, 1);
+        assert_eq!(out, "let h = tokio::spawn(afg_runtime::with_current_context(fut));");
+
+        let (out, n) = wrap_spawns("tokio::task::spawn(async move { work().await; });");
+        assert_eq!(n, 1);
+        assert_eq!(
+            out,
+            "tokio::task::spawn(afg_runtime::with_current_context(async move { work().await; }));"
+        );
+    }
+
+    #[test]
+    fn one_wrap_for_whole_argument_with_inner_parens_and_commas() {
+        let (out, n) = wrap_spawns("tokio::spawn(handle(a, b))");
+        assert_eq!(n, 1);
+        assert_eq!(out, "tokio::spawn(afg_runtime::with_current_context(handle(a, b)))");
+    }
+
+    #[test]
+    fn parens_in_strings_and_chars_do_not_break_matching() {
+        let src = r#"tokio::spawn(async { let s = ")x("; let c = ')'; go().await })"#;
+        let (out, n) = wrap_spawns(src);
+        assert_eq!(n, 1);
+        assert!(out.starts_with("tokio::spawn(afg_runtime::with_current_context(async {"));
+        assert!(out.ends_with("go().await }))"));
+    }
+
+    #[test]
+    fn pattern_inside_string_or_comment_is_ignored() {
+        assert_eq!(wrap_spawns("let s = \"tokio::spawn(\";").1, 0);
+        assert_eq!(wrap_spawns("// tokio::spawn(x)\n").1, 0);
+    }
+
+    #[test]
+    fn spawn_blocking_and_bare_spawn_are_not_wrapped() {
+        assert_eq!(wrap_spawns("tokio::task::spawn_blocking(|| heavy());").1, 0);
+        assert_eq!(wrap_spawns("tokio::spawn_blocking(|| heavy());").1, 0);
+        assert_eq!(wrap_spawns("spawn(fut);").1, 0);
+    }
+
+    #[test]
+    fn not_matched_when_preceded_by_ident() {
+        assert_eq!(wrap_spawns("mytokio::spawn(fut)").1, 0);
+    }
+
+    #[test]
+    fn already_wrapped_is_left_alone() {
+        let src = "tokio::spawn(afg_runtime::with_current_context(fut))";
+        let (out, n) = wrap_spawns(src);
+        assert_eq!(n, 0);
+        assert_eq!(out, src);
+    }
 }

@@ -49,6 +49,50 @@ pub fn current_context() -> AfgContext {
         .unwrap_or_default()
 }
 
+/// Run `future` under the CURRENT task's AFG context.
+///
+/// tokio (and other executors) run `spawn`ed work on a FRESH task, and task-locals
+/// are NOT inherited, so a spawned task loses the request's principal. Wrap the
+/// spawned future with this to carry the principal across the spawn boundary:
+///
+/// ```ignore
+/// tokio::spawn(afg_runtime::with_current_context(async move { /* ... */ }));
+/// ```
+///
+/// The context is captured eagerly (in the calling task, where the principal is
+/// set) and re-established when the returned future runs. This is the piece the
+/// instrumenter wraps around a spawn argument; it adds no executor dependency, so
+/// it works with whatever tokio the application itself uses.
+pub fn with_current_context<F, T>(future: F) -> impl Future<Output = T>
+where
+    F: Future<Output = T>,
+{
+    with_afg_context(current_context(), future)
+}
+
+/// Convenience: `tokio::spawn` a future that carries the current AFG context.
+///
+/// When instrumenting a real application, prefer wrapping the app's own
+/// `tokio::spawn` argument with [`with_current_context`] (so the app's own tokio
+/// version and `JoinHandle` type are used). This helper is for AFG's own
+/// demos/harnesses, where afg-runtime's tokio is the one in use.
+pub fn afg_spawn<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::spawn(with_current_context(future))
+}
+
+/// Context-carrying counterpart to `tokio::spawn!`-style use. `afg_spawn!(fut)`
+/// spawns `fut` so it keeps the current principal (see [`afg_spawn`]).
+#[macro_export]
+macro_rules! afg_spawn {
+    ($future:expr $(,)?) => {{
+        $crate::afg_spawn($future)
+    }};
+}
+
 pub fn set_auth(
     principal: impl Into<String>,
     method: impl Into<String>,
@@ -392,6 +436,34 @@ macro_rules! afg_leak {
 #[cfg(test)]
 mod tests {
     use super::{gate_check, ScheduleStep};
+
+    // A bare tokio::spawn drops the task-local principal; with_current_context
+    // carries it across the spawn boundary. This is the tokio issue that heavy-
+    // spawn apps hit during dynamic instrumentation.
+    #[test]
+    fn spawn_context_propagation() {
+        use super::{current_context, with_afg_context, with_current_context, AfgContext};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime");
+        rt.block_on(async {
+            let ctx = AfgContext { principal: Some("alice".into()), auth: None };
+            with_afg_context(ctx, async {
+                // In the request task, the principal is visible.
+                assert_eq!(current_context().principal.as_deref(), Some("alice"));
+
+                // A bare spawn runs on a fresh task and does NOT inherit it.
+                let bare = tokio::spawn(async { current_context().principal });
+                assert_eq!(bare.await.unwrap(), None);
+
+                // with_current_context captures it and re-establishes it.
+                let wrapped =
+                    tokio::spawn(with_current_context(async { current_context().principal }));
+                assert_eq!(wrapped.await.unwrap(), Some("alice".to_string()));
+            })
+            .await;
+        });
+    }
 
     fn steps() -> Vec<ScheduleStep> {
         vec![
