@@ -1,5 +1,5 @@
-{"seq":1,"seed":null,"event":"monitor","principal":"alice@example.com","function_id":770077,"module":"afg_tabby_harness","file":"afg_harness/src/main.rs","line":43}
-{"seq":2,"seed":null,"event":"access","principal":"alice@example.com","node":7000,"kind":"Write","function_id":770077,"file":"afg_harness/src/main.rs","line":44}
-{"seq":3,"seed":null,"event":"monitor","principal":"bob@example.com","function_id":770077,"module":"afg_tabby_harness","file":"afg_harness/src/main.rs","line":56}
-{"seq":4,"seed":null,"event":"access","principal":"bob@example.com","node":7000,"kind":"Read","function_id":770077,"file":"afg_harness/src/main.rs","line":57}
+{"seq":1,"seed":null,"event":"monitor","principal":"alice@example.com","function_id":770077,"module":"afg_tabby_harness","file":"afg_tabby_harness/src/main.rs","line":53}
+{"seq":2,"seed":null,"event":"access","principal":"alice@example.com","node":7000,"kind":"Write","function_id":770077,"resource":"thread:1","count":1,"file":"afg_tabby_harness/src/main.rs","line":54}
+{"seq":3,"seed":null,"event":"monitor","principal":"bob@example.com","function_id":770077,"module":"afg_tabby_harness","file":"afg_tabby_harness/src/main.rs","line":79}
+{"seq":4,"seed":null,"event":"access","principal":"bob@example.com","node":7000,"kind":"Read","function_id":770077,"resource":"thread:1","count":1,"file":"afg_tabby_harness/src/main.rs","line":86}
 {"seq":5,"seed":null,"event":"leak","principal":"bob@example.com","owner":"alice@example.com","detail":"ALICE-PRIVATE: quarterly numbers"}

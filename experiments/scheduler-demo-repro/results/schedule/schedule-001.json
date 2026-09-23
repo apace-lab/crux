@@ -1,0 +1,10 @@
+[
+  {
+    "principal": "alice",
+    "site": 5000
+  },
+  {
+    "principal": "bob",
+    "site": 5000
+  }
+]

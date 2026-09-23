@@ -1,0 +1,7 @@
+{"event":"auth","principal":"2","method":"join_channel_buffer","permissions":[],"duration_ms":null,"seq":1}
+{"event":"access","principal":"2","node":7300,"kind":"read","resource":"channel:1","count":0,"file":"crates/collab/src/rpc.rs","line":3556,"seq":2}
+{"event":"auth","principal":"3","method":"join_channel_buffer","permissions":[],"duration_ms":null,"seq":3}
+{"event":"access","principal":"3","node":7300,"kind":"read","resource":"channel:1","count":0,"file":"crates/collab/src/rpc.rs","line":3556,"seq":4}
+{"event":"auth","principal":"4","method":"join_channel_buffer","permissions":[],"duration_ms":null,"seq":5}
+{"event":"auth","principal":"1","method":"join_channel_buffer","permissions":[],"duration_ms":null,"seq":6}
+{"event":"access","principal":"1","node":7300,"kind":"read","resource":"channel:1","count":0,"file":"crates/collab/src/rpc.rs","line":3556,"seq":7}

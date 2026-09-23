@@ -1,19 +1,28 @@
-// AFG dynamic cross-user check against TabbyML/tabby's REAL database code.
+// AFG dynamic cross-user check against TabbyML/tabby's REAL access-control code.
 //
-// AFG's static producer flagged tabby-db's thread store (ee/tabby-db/src/threads.rs:
-// create_thread_message = data-write, list_thread_messages = data-read) as a shared
-// data-access site, and confirmed those queries key on thread_id with NO user_id
-// scope. This harness drives that real code as two users and records the accesses
-// so afg_observe can see the cross-user overlap + leak.
+// This is the corrected, path-sensitive demonstration. The earlier version drove
+// tabby-db's list_thread_messages directly, which bypasses the resolver layer. The
+// access-control-enforcement analysis (results/ACCESS_CONTROL_ENFORCEMENT.md) showed that the
+// normal read path (Query::thread_messages) IS guarded by
+// AccessPolicy::check_read_thread, but the thread-to-page conversion path
+// (Mutation::create_thread_to_page_run -> PageService::convert_thread_to_page) reads
+// the same thread with NO ownership check. So the leak is real, but it lives on the
+// conversion path, not the direct read.
 //
-// The store node id (THREADS_NODE) and with_afg_context are the hand-added AFG
-// scaffolding (the per-request principal wrapping AFG does not auto-insert, and a
-// single node standing for the shared thread_messages table). Everything else is
-// tabby's own code + schema, run for real on an in-memory SQLite.
+// This harness uses tabby's REAL AccessPolicy and REAL list_thread_messages to show
+// the contrast on a PRIVATE (ephemeral) thread:
+//   - guarded path: check_read_thread refuses bob (correct).
+//   - conversion path: the exact read sequence convert_thread_to_page performs
+//     (get-for-existence, then list_thread_messages, no check) serves bob alice's
+//     private thread.
+// It does not run the LLM page generation that follows the read; the data is already
+// exfiltrated at the read, which is what the AFG probe records.
 use afg_runtime::{with_afg_context, AfgContext};
 use tabby_db::DbConn;
+use tabby_schema::policy::AccessPolicy;
+use tabby_schema::AsID;
 
-// The shared thread_messages table (what AFG flagged in threads.rs).
+// The shared thread_messages store (what AFG flagged in threads.rs).
 const THREADS_NODE: u64 = 7000;
 const HANDLER_FN: u64 = 770077;
 
@@ -36,12 +45,13 @@ async fn main() {
         .await
         .expect("create bob");
 
-    // Alice: create a persisted thread and post a private message. This is the
-    // data-WRITE to the shared thread_messages store.
+    // Alice creates a PRIVATE (ephemeral) thread and posts a private message.
+    // is_ephemeral = true means the thread is NOT shared: check_read_thread must
+    // refuse non-owners. This is the data-WRITE to the shared thread store.
     let alice_thread = with_afg_context(ctx("alice@example.com"), async {
-        let thread = db.create_thread(alice, false).await.expect("alice thread");
+        let thread = db.create_thread(alice, true).await.expect("alice thread");
         afg_runtime::afg_monitor!(function = HANDLER_FN);
-        afg_runtime::afg_access!(node = THREADS_NODE, kind = afg_runtime::AccessKind::Write, function = HANDLER_FN);
+        afg_runtime::afg_access!(node = THREADS_NODE, kind = afg_runtime::AccessKind::Write, function = HANDLER_FN, resource = format!("thread:{thread}"), count = 1u64);
         db.create_thread_message(thread, "user", "ALICE-PRIVATE: quarterly numbers", None, None, None, false)
             .await
             .expect("alice message");
@@ -49,25 +59,49 @@ async fn main() {
     })
     .await;
 
-    // Bob: read Alice's thread by id. list_thread_messages scopes only by
-    // thread_id (no user_id), so Bob is served Alice's message. This is the
-    // data-READ from the same shared store, by a different principal.
+    // Bob's REAL access policy (a normal, non-admin authenticated user).
+    let bob_policy = AccessPolicy::new(db.clone(), &bob.as_id(), false);
+
+    // --- Path 1: the GUARDED read path (Query::thread_messages resolver logic) ---
+    // The resolver calls user.policy.check_read_thread(thread.user_id, is_ephemeral)
+    // before reading. For alice's private ephemeral thread, bob must be refused.
+    let guarded = bob_policy.check_read_thread(&alice.as_id(), true);
+    match &guarded {
+        Err(_) => println!("[guarded path] check_read_thread REFUSES bob (correct)"),
+        Ok(()) => println!("[guarded path] check_read_thread ALLOWED bob (unexpected!)"),
+    }
+
+    // --- Path 2: the CONVERSION read path (convert_thread_to_page logic) ---
+    // convert_thread_to_page fetches the thread only to confirm existence, then calls
+    // list_thread_messages with NO check_read_thread, and embeds the messages in a
+    // page owned by the caller. Reproduce that exact read sequence as bob.
     with_afg_context(ctx("bob@example.com"), async {
         afg_runtime::afg_monitor!(function = HANDLER_FN);
-        afg_runtime::afg_access!(node = THREADS_NODE, kind = afg_runtime::AccessKind::Read, function = HANDLER_FN);
+        // convert_thread_to_page: `let _thread = self.thread.get(thread_id)...;`  (existence only)
+        // convert_thread_to_page: `let thread_messages = self.thread.list_thread_messages(...)` (no check)
         let messages = db
             .list_thread_messages(alice_thread, None, None, false)
             .await
-            .expect("bob reads alice's thread");
-        let _ = bob;
+            .expect("conversion path reads alice's thread");
+        afg_runtime::afg_access!(node = THREADS_NODE, kind = afg_runtime::AccessKind::Read, function = HANDLER_FN, resource = format!("thread:{alice_thread}"), count = messages.len() as u64);
         for m in &messages {
             if m.content.contains("ALICE-PRIVATE") {
                 afg_runtime::afg_leak!(owner = "alice@example.com", detail = m.content.as_str());
-                println!("[leak] bob was served alice's thread message: {}", m.content);
+                println!(
+                    "[conversion path] bob served alice's PRIVATE thread (no check_read_thread): {}",
+                    m.content
+                );
             }
         }
     })
     .await;
 
-    println!("done");
+    // The invariant: the same underlying read is dominated by check_read_thread on the
+    // resolver path (bob refused) but NOT on the conversion path (bob served). The
+    // un-dominated path is the bug.
+    assert!(
+        guarded.is_err(),
+        "the guarded path should refuse bob on a private thread"
+    );
+    println!("done: guarded path refuses bob; convert_thread_to_page path serves him -> un-dominated path is the leak");
 }
