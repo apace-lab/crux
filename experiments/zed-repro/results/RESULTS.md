@@ -194,10 +194,6 @@ genuine real-world cross-user leak. zed is therefore a MIXED
 target: join path guarded (true negative across 21 interleavings), removal path
 leaks (confirmed), analogous to AppFlowy (single-get guarded, batch leaks).
 
-NOTE (responsible disclosure): this is a real access-control gap in a widely used
-application. Before any public paper release, report it to the zed maintainers and
-allow time to fix / coordinate.
-
 ## Schedule-DEPENDENT LEAK (join vs removal race): the schedule-driven-testing result
 
 The persistent leak above is deterministic. AFG also finds a variant whose very
