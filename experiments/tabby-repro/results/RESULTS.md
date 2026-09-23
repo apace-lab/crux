@@ -11,7 +11,7 @@ tabby leaks chat threads across users. `list_thread_messages`
 filter. The static pass flags this shared thread store; the dynamic run reproduces
 a cross-user read.
 
-IMPORTANT (corrected 2026-09-23, see results/ENFORCEMENT_PILOT.md): the leak is
+IMPORTANT (corrected 2026-09-23, see results/ACCESS_CONTROL_ENFORCEMENT.md): the leak is
 path-sensitive. The normal read path, `Query::thread_messages`, IS guarded by
 `AccessPolicy::check_read_thread`. The real leak is the thread-to-page conversion
 path (`Mutation::create_thread_to_page_run` ->

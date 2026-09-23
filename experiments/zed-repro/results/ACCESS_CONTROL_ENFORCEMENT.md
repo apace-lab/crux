@@ -1,4 +1,4 @@
-# Access-control enforcement pass - zed
+# Access-control enforcement - zed
 
 Enforcement pass on zed collab commit `739fdbe`. Dynamic/manual (rustc 1.98 -> LLVM 20
 blocks the static producer). This ties the zed findings (RESULTS.md) into the

@@ -1,0 +1,6 @@
+{
+  "verdict": "reproduced",
+  "writer": "alice",
+  "reader": "bob",
+  "panode": 5000
+}

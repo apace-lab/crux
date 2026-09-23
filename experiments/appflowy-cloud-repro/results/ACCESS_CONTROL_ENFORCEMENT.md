@@ -1,9 +1,9 @@
-# Access-control enforcement pilot - AppFlowy-Cloud
+# Access-control enforcement - AppFlowy-Cloud
 
-Second pilot of the access-control-enforcement analysis (for every data-access
+Second application of the access-control-enforcement analysis (for every data-access
 site, is it dominated by an access-control check?), on AppFlowy-Cloud commit
 `c5bcfd3`. Confirms the known leak precisely and reinforces the path-sensitivity
-lesson from the tabby pilot.
+lesson from the tabby analysis.
 
 ## Method
 

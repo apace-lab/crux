@@ -1,6 +1,6 @@
-# Access-control enforcement pilot - tabby
+# Access-control enforcement - tabby
 
-Pilot of the access-control-enforcement analysis (the comprehensive dominance
+The access-control-enforcement analysis (the comprehensive dominance
 check: for every data-access site, is it dominated by an access-control check?) on
 tabby, commit `21b2904`. Method + output + a significant finding that corrects our
 earlier tabby framing.

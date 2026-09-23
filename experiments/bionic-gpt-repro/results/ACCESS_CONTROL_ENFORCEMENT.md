@@ -1,4 +1,4 @@
-# Access-control enforcement pass - bionic-gpt
+# Access-control enforcement - bionic-gpt
 
 Enforcement pass on bionic-gpt commit `6a82275`. Done dynamically/manually because
 rustc 1.97 -> LLVM 20 blocks the static producer. This is the clean case: the pass

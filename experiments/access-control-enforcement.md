@@ -77,10 +77,10 @@ plainly in the paper.
 
 ## Status
 
-- [x] tabby pilot DONE -> results/ENFORCEMENT_PILOT.md. Found a real, path-sensitive leak (convert_thread_to_page missing check_read_thread) AND corrected our earlier tabby framing (direct thread_messages IS resolver-guarded; persisted-thread sharing may be intended).
-- [x] AppFlowy DONE -> appflowy-cloud-repro/results/ENFORCEMENT_PILOT.md. batch_get_collab (uid ignored, no enforce) UNSCOPED = leak; get_full_encode_collab enforces Action::Read = dominated. Same path-sensitive pattern; check lives in the STORAGE layer here (not the resolver).
-- [x] bionic-gpt DONE -> bionic-gpt-repro/results/ENFORCEMENT_PILOT.md. TRUE NEGATIVE: ownership predicate (user_id=current_app_user()) EMBEDDED in every tenant read query + fail-closed GUC -> not omittable per-path.
-- [x] zed DONE -> zed-repro/results/ENFORCEMENT_PILOT.md. Path/subsystem-sensitive: buffer join read dominated; buffer edit broadcast UN-dominated (removal/downgrade not evicted) = LEAK; project worktree broadcast dominated (collaborator lifecycle coupled). All 4 apps done.
+- [x] tabby pilot DONE -> results/ACCESS_CONTROL_ENFORCEMENT.md. Found a real, path-sensitive leak (convert_thread_to_page missing check_read_thread) AND corrected our earlier tabby framing (direct thread_messages IS resolver-guarded; persisted-thread sharing may be intended).
+- [x] AppFlowy DONE -> appflowy-cloud-repro/results/ACCESS_CONTROL_ENFORCEMENT.md. batch_get_collab (uid ignored, no enforce) UNSCOPED = leak; get_full_encode_collab enforces Action::Read = dominated. Same path-sensitive pattern; check lives in the STORAGE layer here (not the resolver).
+- [x] bionic-gpt DONE -> bionic-gpt-repro/results/ACCESS_CONTROL_ENFORCEMENT.md. TRUE NEGATIVE: ownership predicate (user_id=current_app_user()) EMBEDDED in every tenant read query + fail-closed GUC -> not omittable per-path.
+- [x] zed DONE -> zed-repro/results/ACCESS_CONTROL_ENFORCEMENT.md. Path/subsystem-sensitive: buffer join read dominated; buffer edit broadcast UN-dominated (removal/downgrade not evicted) = LEAK; project worktree broadcast dominated (collaborator lifecycle coupled). All 4 apps done.
 
 
 ## Enforcement-style taxonomy (all 4 apps done, 2026-09-23)

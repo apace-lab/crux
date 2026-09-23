@@ -26,7 +26,8 @@ Schedule-driven testing has three components and one loop.
    makes the executor choose a different order for pending tasks. A seed is therefore
    a handle to one point in the schedule space. (Apps without such an executor, e.g.
    the Tokio-based targets, would need a deterministic runtime simulator such as
-   madsim; that is future work and was not run here.)
+   madsim. AFG's own scheduler with madsim replay is exercised on a controlled demo,
+   see `scheduler-demo-repro/results/RESULTS.md`.)
 
 2. Probes. `crates/collab/src/afg_probe.rs` plus call sites in `crates/collab/src/rpc.rs`
    record, per principal: the membership check outcome, the channel-buffer read at
@@ -109,7 +110,7 @@ product.)
 - tabby: path-sensitive missing check. `list_thread_messages` is guarded on the
   `thread_messages` resolver path (`check_read_thread`) but not on the
   `convert_thread_to_page` path, which leaks any thread including private ones.
-  Deterministic; the leak appears on the first run. (See `tabby-repro/results/ENFORCEMENT_PILOT.md`.)
+  Deterministic; the leak appears on the first run. (See `tabby-repro/results/ACCESS_CONTROL_ENFORCEMENT.md`.)
 - AppFlowy: `batch_get_collab` reads with no access check while `get_full_encode_collab`
   enforces it. Deterministic; the leak appears on the first run.
 - bionic-gpt: guarded by an in-query ownership predicate (`user_id = current_app_user()`)
@@ -195,7 +196,11 @@ traces) and `zed-repro/results/projleave/` (project control sweep).
 
 - Only zed provides a deterministic scheduler natively. The Tokio targets (tabby,
   bionic, AppFlowy) were single-run reproductions; sweeping schedules on them would
-  require a deterministic runtime simulator (madsim), which was not run here.
+  require a deterministic runtime simulator (madsim), which none of them build under.
+  AFG's own scheduler with madsim replay is validated on a controlled demo
+  (`scheduler-demo-repro/results/RESULTS.md`): it generates 2 alternative interleavings
+  and reproduces the write-then-read cache leak on the second (1/2 schedules), each
+  replay about 23 ms.
 - zed's test database is SQLite, which serializes the two racing transactions, so each
   seed resolves cleanly to leak or clean. On Postgres (production) the window could be
   wider, so this does not overstate the effect.

@@ -2,7 +2,7 @@
 //
 // This is the corrected, path-sensitive demonstration. The earlier version drove
 // tabby-db's list_thread_messages directly, which bypasses the resolver layer. The
-// access-control-enforcement analysis (results/ENFORCEMENT_PILOT.md) showed that the
+// access-control-enforcement analysis (results/ACCESS_CONTROL_ENFORCEMENT.md) showed that the
 // normal read path (Query::thread_messages) IS guarded by
 // AccessPolicy::check_read_thread, but the thread-to-page conversion path
 // (Mutation::create_thread_to_page_run -> PageService::convert_thread_to_page) reads
