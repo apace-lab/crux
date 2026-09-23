@@ -165,7 +165,10 @@ async fn afg_state(State(src): State<Arc<Source>>) -> Json<AfgState> {
     let schedules = generate_schedules(&obs, 20);
     let events = read_events(&src.traces);
 
-    let leaks: Vec<LeakItem> = events
+    // App-reported leaks (afg_runtime `leak` events) plus AFG-derived
+    // resource-linked leaks (a cross-user read of a resource instance that
+    // returned another principal's rows). Both render in the same leak UI.
+    let mut leaks: Vec<LeakItem> = events
         .iter()
         .filter(|e| e.kind == "leak")
         .map(|e| LeakItem {
@@ -174,6 +177,13 @@ async fn afg_state(State(src): State<Arc<Source>>) -> Json<AfgState> {
             detail: e.detail.clone().unwrap_or_default(),
         })
         .collect();
+    for l in &obs.resource_leaks {
+        leaks.push(LeakItem {
+            reader: l.reader.clone(),
+            owner: l.owner.clone(),
+            detail: format!("read {} (node {}), served {} row(s)", l.resource, l.panode, l.rows),
+        });
+    }
 
     let verdicts = src
         .run_dir

@@ -1,0 +1,5 @@
+{"duration_ms":null,"event":"auth","method":"gotrue","permissions":[],"principal":"636449085460582400","seq":1}
+{"count":4393,"event":"access","file":"src/api/workspace.rs","kind":"Read","line":1953,"node":7200,"principal":"636449085460582400","resource":"collab:24139f7a-970c-4bfe-a858-459a76fcda1e","seq":2}
+{"duration_ms":null,"event":"auth","method":"gotrue","permissions":[],"principal":"636449085917761536","seq":3}
+{"duration_ms":null,"event":"auth","method":"gotrue","permissions":[],"principal":"636449085917761536","seq":4}
+{"count":4393,"event":"access","file":"src/api/workspace.rs","kind":"Read","line":1953,"node":7200,"principal":"636449085917761536","resource":"collab:24139f7a-970c-4bfe-a858-459a76fcda1e","seq":5}

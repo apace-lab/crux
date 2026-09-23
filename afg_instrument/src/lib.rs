@@ -29,6 +29,14 @@ pub enum SiteAction {
         /// `afg_schedule_point!(site = ..)` gate is inserted just before the
         /// access so a replay schedule can order this access across principals.
         schedule_site: Option<u64>,
+        /// Resource id of the shared store this access touches: the points-to
+        /// target the data-access call's store argument aliases. Two data-access
+        /// sites on the same store (e.g. a write via `execute` and a read via
+        /// `fetch_one`) get the SAME resource id even though their per-callsite
+        /// PANodes differ, so the write-then-read leak can be linked across them.
+        /// None for accesses with no identifiable shared store (e.g. LLM calls).
+        #[serde(default)]
+        resource: Option<u64>,
     },
     /// Establish the runtime principal for the current task. Injected before the
     /// auth call line; the instrumenter extracts the auth call's first argument
@@ -107,6 +115,7 @@ pub fn instrument_project(
                     access,
                     call_name,
                     schedule_site,
+                    resource,
                 } => {
                     let fn_id = function_id.unwrap_or(0);
                     let kind = match access {
@@ -122,15 +131,41 @@ pub fn instrument_project(
                         }
                         _ => String::new(),
                     };
+                    // When the producer resolved the shared store this access
+                    // touches, tag the access with that resource id so a write and a
+                    // read on the same store link even though their PANodes differ.
+                    let access_call = match resource {
+                        Some(r) => format!(
+                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id}, resource = \"res:{r}\");"
+                        ),
+                        None => format!(
+                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                        ),
+                    };
                     let injected = format!(
-                        "{gate}afg_runtime::afg_monitor!(function = {fn_id});\nafg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                        "{gate}afg_runtime::afg_monitor!(function = {fn_id});\n{access_call}"
                     );
-                    // Insert before the located call line (executed path, and
-                    // syntactically safe even when the call is a tail expression),
-                    // else at the site line.
+                    // Insert before the enclosing STATEMENT, not the call line.
+                    // A data-access call is usually the tail of a multi-line method
+                    // chain (`let x = q()\n.bind(..)\n.fetch_all(..)\n.await?;`), and
+                    // inserting between the chain lines splits the expression and
+                    // fails to compile. `statement_start` walks up to the first line
+                    // of the statement so the macros land before the whole thing.
                     let idx = match call_name {
                         Some(name) => {
-                            find_call_line(&lines, site.line - 1, name).unwrap_or(site.line - 1)
+                            let call_idx =
+                                find_call_line(&lines, site.line - 1, name).unwrap_or(site.line - 1);
+                            match statement_start(&lines, call_idx) {
+                                Some(s) => s,
+                                None => {
+                                    eprintln!(
+                                        "[instrument] note: skipping access at {}:{} ({name}): the call sits in an expression position (match arm / argument) where a statement cannot be inserted safely",
+                                        path.display(),
+                                        site.line
+                                    );
+                                    continue;
+                                }
+                            }
                         }
                         None => site.line - 1,
                     };
@@ -460,6 +495,76 @@ fn find_call_line(lines: &[String], start: usize, call_name: &str) -> Option<usi
         .map(|(i, _)| i)
 }
 
+/// Strip a trailing `//` line comment from a source line, leaving string literals
+/// and `://` (as in a URL) intact. Best-effort: used only to see the real last
+/// character of a line for statement-boundary detection.
+fn strip_line_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut prev = b' ';
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' && prev != b'\\' {
+            in_str = !in_str;
+        }
+        if !in_str && c == b'/' && bytes[i + 1] == b'/' && prev != b':' {
+            return &line[..i];
+        }
+        prev = c;
+        i += 1;
+    }
+    line
+}
+
+/// Index of the first line of the statement that contains the call at `call_idx`.
+///
+/// A data-access call is usually the tail of a multi-line method chain, so the
+/// macros must be inserted before the statement, not between chain lines. This
+/// walks up from the call line while each line above is a continuation of the same
+/// statement, and stops at a clean statement or block boundary (a line ending in
+/// `;`, `{`, `}`, or a blank line). It returns `None` when the call is in an
+/// expression position where a statement cannot be inserted (a match arm without a
+/// block, or an argument list), so the caller can skip rather than emit code that
+/// will not compile.
+fn statement_start(lines: &[String], call_idx: usize) -> Option<usize> {
+    // The candidate start line must itself be a place a statement can go: not a
+    // match arm (`pat => expr`), which reads as a boundary below (its previous line
+    // ends in `{` or `,`) but is not a statement slot.
+    let is_statement_slot = |idx: usize| !strip_line_comment(&lines[idx]).contains("=>");
+
+    let mut start = call_idx;
+    while start > 0 {
+        let prev = strip_line_comment(&lines[start - 1]).trim_end();
+        if prev.is_empty() {
+            return if is_statement_slot(start) { Some(start) } else { None };
+        }
+        if prev.ends_with("=>") {
+            // match arm whose expression starts on the next line: not a slot.
+            return None;
+        }
+        match prev.as_bytes()[prev.len() - 1] {
+            // clean statement / block boundary: the statement starts at `start`.
+            b';' | b'{' | b'}' => {
+                return if is_statement_slot(start) { Some(start) } else { None };
+            }
+            // tuple / array / or-pattern element position: a statement inserted
+            // here would be inside an expression, so bail.
+            b',' | b'[' | b'|' => return None,
+            // `(`, `)`, an operator, `?`, a chained `.`, an identifier: a
+            // continuation of the same statement, so keep walking up. A leading `(`
+            // means the call is an argument, but `foo(...)` is itself a statement,
+            // so we continue to its start.
+            _ => start -= 1,
+        }
+    }
+    if is_statement_slot(0) {
+        Some(0)
+    } else {
+        None
+    }
+}
+
 /// Whether an extracted first argument looks like a string principal (a token or
 /// username) rather than, e.g., the password bytes passed to argon2/bcrypt.
 fn looks_like_string_principal(arg: &str) -> bool {
@@ -632,5 +737,107 @@ mod spawn_wrap_tests {
         let (out, n) = wrap_spawns(src);
         assert_eq!(n, 0);
         assert_eq!(out, src);
+    }
+}
+
+#[cfg(test)]
+mod statement_start_tests {
+    use super::{statement_start, strip_line_comment};
+
+    fn lines(src: &str) -> Vec<String> {
+        src.lines().map(str::to_owned).collect()
+    }
+
+    // The tabby / bionic shape: a multi-line method chain bound with `let`. The
+    // call is on line 3 (the `.fetch_all` line); the statement starts at the `let`.
+    #[test]
+    fn multiline_chain_returns_let_line() {
+        let src = "\
+fn h() {
+    let history = db::queries::history()
+        .bind(&t, &id)
+        .fetch_all(&self.pool)
+        .await?;
+}";
+        let l = lines(src);
+        // .fetch_all is index 3; statement starts at the `let history` line, index 1.
+        assert_eq!(statement_start(&l, 3), Some(1));
+    }
+
+    // A single-line statement: start is the line itself.
+    #[test]
+    fn single_line_statement() {
+        let src = "\
+fn h() {
+    let x = q().fetch_one(&p).await?;
+}";
+        let l = lines(src);
+        assert_eq!(statement_start(&l, 1), Some(1));
+    }
+
+    // Tail expression of a block (no `let`, no trailing `;`): still a statement slot.
+    #[test]
+    fn tail_expression_after_block_open() {
+        let src = "\
+fn h() -> X {
+    db::query()
+        .fetch_one(&p)
+        .await
+}";
+        let l = lines(src);
+        assert_eq!(statement_start(&l, 2), Some(1));
+    }
+
+    // Call inside a match arm without a block: not a statement slot, so bail.
+    #[test]
+    fn match_arm_expression_bails() {
+        let src = "\
+fn h() {
+    match x {
+        A => db::query()
+            .fetch_one(&p)
+            .await?,
+    }
+}";
+        let l = lines(src);
+        // the .fetch_one line is index 3; walking up hits `A => db::query()`.
+        assert_eq!(statement_start(&l, 3), None);
+    }
+
+    // Call inside a function argument: the enclosing `foo(...)` is itself a
+    // statement, so inserting before it is safe.
+    #[test]
+    fn call_as_function_argument_is_a_statement() {
+        let src = "\
+fn h() {
+    foo(bar()
+        .fetch_one(&p)
+        .await?);
+}";
+        let l = lines(src);
+        assert_eq!(statement_start(&l, 2), Some(1));
+    }
+
+    // Call inside an array/vec element (comma-separated): not a statement slot.
+    #[test]
+    fn array_element_bails() {
+        let src = "\
+fn h() {
+    let v = vec![
+        q().fetch_one(&p)
+            .await?,
+        other,
+    ];
+}";
+        let l = lines(src);
+        // the fetch_one line is index 2; the line above ends with `vec![`.
+        assert_eq!(statement_start(&l, 2), None);
+    }
+
+    #[test]
+    fn strip_line_comment_keeps_url_and_strings() {
+        assert_eq!(strip_line_comment("let x = 5; // note").trim_end(), "let x = 5;");
+        assert_eq!(strip_line_comment("let u = \"http://x\";"), "let u = \"http://x\";");
+        assert_eq!(strip_line_comment("let s = \"a // b\";"), "let s = \"a // b\";");
     }
 }
