@@ -1,0 +1,5 @@
+{"event":"access","principal":"1","node":7400,"kind":"write","resource":"project:1","count":2,"file":"crates/collab/src/rpc.rs","line":2231,"seq":1}
+{"event":"access","principal":"2","node":7400,"kind":"read","resource":"project:1","count":2,"file":"crates/collab/src/rpc.rs","line":2248,"seq":2}
+{"event":"access","principal":"3","node":7400,"kind":"read","resource":"project:1","count":2,"file":"crates/collab/src/rpc.rs","line":2248,"seq":3}
+{"event":"access","principal":"1","node":7400,"kind":"write","resource":"project:1","count":3,"file":"crates/collab/src/rpc.rs","line":2231,"seq":4}
+{"event":"access","principal":"3","node":7400,"kind":"read","resource":"project:1","count":3,"file":"crates/collab/src/rpc.rs","line":2248,"seq":5}
