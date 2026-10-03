@@ -1,0 +1,162 @@
+=== observation ===
+{
+  "accesses": [
+    {
+      "seed": null,
+      "seq": 1,
+      "principal": "person:3",
+      "panode": 9600,
+      "access": "Write",
+      "function_id": 960001,
+      "site": null,
+      "resource": "pm:1",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 2,
+      "principal": "person:5",
+      "panode": 9600,
+      "access": "Read",
+      "function_id": 960002,
+      "site": null,
+      "resource": "pm:1",
+      "count": 1
+    },
+    {
+      "seed": null,
+      "seq": 3,
+      "principal": "person:4",
+      "panode": 9600,
+      "access": "Write",
+      "function_id": 960002,
+      "site": null,
+      "resource": "pm:1",
+      "count": 0
+    }
+  ],
+  "principals": {
+    "person:3": {
+      "functions": [
+        960001
+      ],
+      "read_nodes": [],
+      "write_nodes": [
+        9600
+      ]
+    },
+    "person:4": {
+      "functions": [
+        960002
+      ],
+      "read_nodes": [],
+      "write_nodes": [
+        9600
+      ]
+    },
+    "person:5": {
+      "functions": [
+        960002
+      ],
+      "read_nodes": [
+        9600
+      ],
+      "write_nodes": []
+    }
+  },
+  "overlaps": [
+    {
+      "left": "person:3",
+      "right": "person:4",
+      "shared_nodes": [
+        9600
+      ]
+    },
+    {
+      "left": "person:3",
+      "right": "person:5",
+      "shared_nodes": [
+        9600
+      ]
+    },
+    {
+      "left": "person:4",
+      "right": "person:5",
+      "shared_nodes": [
+        9600
+      ]
+    }
+  ],
+  "resource_leaks": [
+    {
+      "resource": "pm:1",
+      "panode": 9600,
+      "owner": "person:3",
+      "reader": "person:5",
+      "rows": 1
+    }
+  ]
+}
+=== schedules (4) ===
+[
+  {
+    "reason": "cross-user leak on resource pm:1 (person:3 writes before person:5 reads, linked across PANodes)",
+    "panode": 9600,
+    "resource": "pm:1",
+    "steps": [
+      {
+        "principal": "person:3",
+        "site": 9600
+      },
+      {
+        "principal": "person:5",
+        "site": 9600
+      }
+    ]
+  },
+  {
+    "reason": "cross-user overlap on PANode 9600 (person:3 vs person:4)",
+    "panode": 9600,
+    "resource": null,
+    "steps": [
+      {
+        "principal": "person:3",
+        "site": 9600
+      },
+      {
+        "principal": "person:4",
+        "site": 9600
+      }
+    ]
+  },
+  {
+    "reason": "cross-user overlap on PANode 9600 (person:3 writes before person:5 reads)",
+    "panode": 9600,
+    "resource": null,
+    "steps": [
+      {
+        "principal": "person:3",
+        "site": 9600
+      },
+      {
+        "principal": "person:5",
+        "site": 9600
+      }
+    ]
+  },
+  {
+    "reason": "cross-user overlap on PANode 9600 (person:4 writes before person:5 reads)",
+    "panode": 9600,
+    "resource": null,
+    "steps": [
+      {
+        "principal": "person:4",
+        "site": 9600
+      },
+      {
+        "principal": "person:5",
+        "site": 9600
+      }
+    ]
+  }
+]
