@@ -1,0 +1,4 @@
+      taint analysis: app_crate="dominance_demo", 5 semantic points, 1 principals, 0 tagged nodes
+      dominance: 3 data-access site(s), 1 dominated, 0 unreachable, 2 UN-DOMINATED candidate(s); 2 check site(s), 0 shared-infra pointee(s) excluded
+        [candidate] access#9 in ..._ZN14dominance_demo14wrong_resource17h48098f4b325a2289E
+        [candidate] access#14 in ..._ZN14dominance_demo9unguarded17h55eba95306b1291aE

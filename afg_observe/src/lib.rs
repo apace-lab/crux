@@ -34,6 +34,16 @@ pub struct AccessObservation {
     pub resource: Option<String>,
     #[serde(default)]
     pub count: Option<u64>,
+    // Principals that this access authorizes for the resource, beyond the writer
+    // itself. A resource with more than one legitimate party (a private message has
+    // a sender AND a recipient; a shared document has an owner AND its collaborators)
+    // declares the extra parties here at write/create time, from the resource's own
+    // data model (who the message is addressed to), NOT from the app's access-control
+    // decision at read time. This keeps the read-site probe dumb (it just emits the
+    // read) and the leak verdict independent of the app's own check. Absent for
+    // single-owner resources and older traces.
+    #[serde(default)]
+    pub authorized: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -147,6 +157,9 @@ fn parse_jsonl_trace(path: &Path, out: &mut ObservationResult) -> Result<()> {
             site: v.get("site").and_then(Value::as_u64),
             resource: v.get("resource").and_then(Value::as_str).map(str::to_string),
             count: v.get("count").and_then(Value::as_u64),
+            authorized: v.get("authorized").and_then(Value::as_array).map(|arr| {
+                arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()
+            }),
         };
 
         let scope = out.principals.entry(principal).or_default();
@@ -182,11 +195,20 @@ fn compute_overlaps(out: &mut ObservationResult) {
     }
 }
 
-/// Resource-linked verdict: for each resource INSTANCE, the owner is the principal
-/// of the first observed write (or, absent a write, the first accessor). A read of
-/// that instance by any other principal that returns rows is a confirmed leak. A
-/// read that returns no rows was dominated by an ownership check and is not a leak,
-/// even though both principals reach the same PANode (the positive-control case).
+/// Resource-linked verdict: for each resource INSTANCE, a set of AUTHORIZED
+/// principals is established from the observed writes: every principal that writes
+/// the instance is authorized, plus any extra parties a write declares in its
+/// `authorized` list (a private message's recipient, a document's collaborators),
+/// which come from the resource's own data model, not the app's access check. The
+/// owner reported for a leak is the first writer. A read of the instance by a
+/// principal NOT in the authorized set that returns rows is a confirmed leak. A read
+/// that returns no rows was dominated by an ownership check and is not a leak, even
+/// though both principals reach the same PANode (the positive-control case).
+///
+/// The authorized-set model generalizes the earlier single-owner rule (which could
+/// only express one legitimate party, forcing a two-party resource's probe to fake
+/// the second party as a writer): with no `authorized` list present it reduces
+/// exactly to "owner = first writer, every other reader-with-rows leaks".
 fn compute_resource_leaks(out: &mut ObservationResult) {
     let mut by_resource: BTreeMap<String, Vec<AccessObservation>> = BTreeMap::new();
     for a in &out.accesses {
@@ -197,6 +219,9 @@ fn compute_resource_leaks(out: &mut ObservationResult) {
 
     for (resource, mut accesses) in by_resource {
         accesses.sort_by_key(|a| a.seq.unwrap_or(u64::MAX));
+
+        // The owner (for reporting) is the first writer, or the first accessor if the
+        // instance is only ever read.
         let owner = accesses
             .iter()
             .find(|a| a.access.eq_ignore_ascii_case("write"))
@@ -204,9 +229,25 @@ fn compute_resource_leaks(out: &mut ObservationResult) {
             .map(|a| a.principal.clone());
         let Some(owner) = owner else { continue };
 
+        // The authorized set: every principal that writes the instance, plus every
+        // extra party any access declares. If nothing is ever written (read-only
+        // instance), the first accessor (the owner above) is the sole authorized one.
+        let mut authorized: BTreeSet<String> = BTreeSet::new();
+        for a in &accesses {
+            if a.access.eq_ignore_ascii_case("write") {
+                authorized.insert(a.principal.clone());
+            }
+            if let Some(extra) = &a.authorized {
+                authorized.extend(extra.iter().cloned());
+            }
+        }
+        if authorized.is_empty() {
+            authorized.insert(owner.clone());
+        }
+
         for a in &accesses {
             if a.access.eq_ignore_ascii_case("read")
-                && a.principal != owner
+                && !authorized.contains(&a.principal)
                 && a.count.unwrap_or(0) > 0
             {
                 out.resource_leaks.push(ResourceLeak {
@@ -236,7 +277,15 @@ mod tests {
             site: None,
             resource: Some(resource.to_string()),
             count: Some(count),
+            authorized: None,
         }
+    }
+
+    // A write/create that also authorizes extra parties (a PM's recipient).
+    fn acc_grant(seq: u64, principal: &str, access: &str, resource: &str, count: u64, grant: &[&str]) -> AccessObservation {
+        let mut a = acc(seq, principal, access, resource, count);
+        a.authorized = Some(grant.iter().map(|s| s.to_string()).collect());
+        a
     }
 
     // Positive control (bionic-gpt shape): alice owns conversation:1, bob's read of
@@ -281,5 +330,42 @@ mod tests {
         ];
         compute_resource_leaks(&mut out);
         assert!(out.resource_leaks.is_empty());
+    }
+
+    // Two-party resource (lemmy private-message shape): alice creates pm:1 addressed
+    // to bob, so the create declares bob as an authorized party. carol (a
+    // non-participant) reading it with rows is a leak; bob (the recipient) reading it
+    // is NOT a leak, with NO app-specific participant logic in the read-site probe
+    // (both carol and bob emit a plain Read). This is the GHSA-r64r scenario expressed
+    // in the authorized-set model.
+    #[test]
+    fn recipient_read_is_authorized_non_participant_read_leaks() {
+        let mut out = ObservationResult::default();
+        out.accesses = vec![
+            acc_grant(1, "alice", "write", "pm:1", 1, &["bob"]), // alice -> bob
+            acc(2, "carol", "read", "pm:1", 1),                  // non-participant: LEAK
+            acc(3, "bob", "read", "pm:1", 1),                    // recipient: authorized
+        ];
+        compute_resource_leaks(&mut out);
+        assert_eq!(out.resource_leaks.len(), 1, "only carol's read should leak");
+        let leak = &out.resource_leaks[0];
+        assert_eq!(leak.resource, "pm:1");
+        assert_eq!(leak.owner, "alice");
+        assert_eq!(leak.reader, "carol");
+    }
+
+    // Without the authorized grant, the old single-owner behaviour is preserved: the
+    // recipient's read would (wrongly, for a PM) look like a leak too. This documents
+    // why the grant is what distinguishes a legitimate second party.
+    #[test]
+    fn without_grant_second_party_read_is_flagged() {
+        let mut out = ObservationResult::default();
+        out.accesses = vec![
+            acc(1, "alice", "write", "pm:1", 1),
+            acc(2, "bob", "read", "pm:1", 1),
+        ];
+        compute_resource_leaks(&mut out);
+        assert_eq!(out.resource_leaks.len(), 1);
+        assert_eq!(out.resource_leaks[0].reader, "bob");
     }
 }

@@ -1,0 +1,19 @@
+{
+  "sites": [
+    {
+      "file": "src/main.rs",
+      "line": 15,
+      "action": {
+        "Access": {
+          "panode": 22,
+          "function_id": 2719560183336704825,
+          "access": "Read",
+          "call_name": "db_read",
+          "schedule_site": 22,
+          "resource": null
+        }
+      },
+      "reason": "data access (data-read): _ZN14autoinstr_demo7db_read17he39f3f62006a884cE"
+    }
+  ]
+}

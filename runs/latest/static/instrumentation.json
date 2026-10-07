@@ -1,529 +1,354 @@
 {
   "sites": [
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 483,
+      "file": "complex.rs",
+      "line": 30,
       "action": {
-        "Access": {
-          "panode": 2586,
-          "function_id": 1840646586494585635,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 2586,
-          "resource": null
+        "Auth": {
+          "call_name": "is_accessible"
         }
       },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
+      "reason": "auth point: is_accessible"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 402,
+      "file": "complex.rs",
+      "line": 30,
       "action": {
-        "Access": {
-          "panode": 3107,
-          "function_id": 9620043111831173797,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 3107,
-          "resource": null
+        "Auth": {
+          "call_name": "is_accessible"
         }
       },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
+      "reason": "auth point: is_accessible"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 408,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 3151,
-          "function_id": 9620043111831173797,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 3151,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 414,
-      "action": {
-        "Access": {
-          "panode": 3198,
-          "function_id": 9620043111831173797,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 3198,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 420,
-      "action": {
-        "Access": {
-          "panode": 3245,
-          "function_id": 9620043111831173797,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 3245,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 426,
-      "action": {
-        "Access": {
-          "panode": 3292,
-          "function_id": 9620043111831173797,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 3292,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 432,
-      "action": {
-        "Access": {
-          "panode": 3340,
-          "function_id": 9620043111831173797,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 3340,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 98,
-      "action": {
-        "Access": {
-          "panode": 3719,
-          "function_id": 8554892565698436185,
+          "panode": 205,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 3719,
+          "call_name": "to_json",
+          "schedule_site": 205,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17h5ba33634a1768118E"
+      "reason": "data access (data-read): _ZN7complex7to_json17h94dc01aa3ab612bfE"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 132,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 4124,
-          "function_id": 6706254003349458286,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 4124,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 261,
-      "action": {
-        "Access": {
-          "panode": 4263,
-          "function_id": 6678888299337247943,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 4263,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 608,
-      "action": {
-        "Access": {
-          "panode": 5613,
-          "function_id": 9143552411006448657,
+          "panode": 218,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_all",
-          "schedule_site": 5613,
+          "call_name": "to_json",
+          "schedule_site": 218,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_all17hf78cd954d9005cc6E"
+      "reason": "data access (data-read): _ZN7complex7to_json28_$u7b$$u7b$closure$u7d$$u7d$17hacd03f5bf5fe9b3eE"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 219,
+      "file": "complex.rs",
+      "line": 40,
       "action": {
         "Access": {
-          "panode": 6262,
-          "function_id": 13626755436460936892,
+          "panode": 343,
+          "function_id": 16969644219317634198,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 6262,
+          "call_name": "to_json",
+          "schedule_site": 343,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17he7ad611b88e7f768E"
+      "reason": "data access (data-read): _ZN7complex7to_json17h94dc01aa3ab612bfE"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 237,
+      "file": "complex.rs",
+      "line": 40,
       "action": {
         "Access": {
-          "panode": 6682,
-          "function_id": 13125929048869793728,
+          "panode": 361,
+          "function_id": 16969644219317634198,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 6682,
+          "call_name": "to_json",
+          "schedule_site": 361,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h1de4f8fc13aea512E"
+      "reason": "data access (data-read): _ZN7complex7to_json28_$u7b$$u7b$closure$u7d$$u7d$17hacd03f5bf5fe9b3eE"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 121,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 7068,
-          "function_id": 8522192586665753992,
+          "panode": 219,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 7068,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17h09a037ec443cb8deE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 274,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 7239,
-          "function_id": 2234278140780879952,
+          "panode": 220,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_all",
-          "schedule_site": 7239,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$9fetch_all17h860d6d4ff6a25abbE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 509,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 7626,
-          "function_id": 8215567393482546555,
+          "panode": 222,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 7626,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17hcf7107920ff151eeE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 297,
+      "file": "complex.rs",
+      "line": 29,
       "action": {
         "Access": {
-          "panode": 7977,
-          "function_id": 1583119032453375554,
+          "panode": 134,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_all",
-          "schedule_site": 7977,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$9fetch_all17h860d6d4ff6a25abbE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 200,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 8370,
-          "function_id": 6100217231883774422,
+          "panode": 218,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 8370,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17hffc93162b4653495E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 499,
+      "file": "complex.rs",
+      "line": 34,
       "action": {
         "Access": {
-          "panode": 8717,
-          "function_id": 7793015224264697603,
+          "panode": 164,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 8717,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17h5ba33634a1768118E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 321,
+      "file": "complex.rs",
+      "line": 34,
       "action": {
         "Access": {
-          "panode": 9144,
-          "function_id": 13465323189688111692,
+          "panode": 170,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 9144,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17he7ad611b88e7f768E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 248,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 9569,
-          "function_id": 14168793057825053477,
+          "panode": 235,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 9569,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17h236582e4138d6b56E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 443,
+      "file": "complex.rs",
+      "line": 34,
       "action": {
         "Access": {
-          "panode": 9997,
-          "function_id": 2280518971376378812,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 9997,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 152,
-      "action": {
-        "Access": {
-          "panode": 10575,
-          "function_id": 3256003930970459073,
+          "panode": 174,
+          "function_id": null,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 10575,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h9c6ca3874a4e6e1eE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 170,
+      "file": "complex.rs",
+      "line": 30,
       "action": {
         "Access": {
-          "panode": 10759,
-          "function_id": 3256003930970459073,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 10759,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 184,
-      "action": {
-        "Access": {
-          "panode": 10779,
-          "function_id": 3256003930970459073,
-          "access": "Write",
-          "call_name": "execute",
-          "schedule_site": 10779,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-write): _ZN9sqlx_core5query19Query$LT$DB$C$A$GT$7execute17h33c4a349c07a8bbbE"
-    },
-    {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 656,
-      "action": {
-        "Access": {
-          "panode": 11647,
-          "function_id": 11491920306564330486,
+          "panode": 195,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_all",
-          "schedule_site": 11647,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_all17h95cd35abe3ca42feE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 670,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 11714,
-          "function_id": 11491920306564330486,
+          "panode": 223,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_all",
-          "schedule_site": 11714,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_all17h95cd35abe3ca42feE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 463,
+      "file": "complex.rs",
+      "line": 30,
       "action": {
         "Access": {
-          "panode": 12455,
-          "function_id": 10922491083643727252,
+          "panode": 199,
+          "function_id": null,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 12455,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17he7ad611b88e7f768E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "crates/atuin-server-postgres/src/lib.rs",
-      "line": 108,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 12815,
-          "function_id": 952146629001989503,
+          "panode": 221,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_one",
-          "schedule_site": 12815,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$9fetch_one17hffc93162b4653495E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "home/ssen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.3/src/query_as.rs",
-      "line": 168,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 15050,
-          "function_id": 621747304125850651,
+          "panode": 239,
+          "function_id": null,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 15050,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h9a603a0af9ef6947E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "home/ssen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.3/src/query_as.rs",
-      "line": 168,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 15883,
-          "function_id": 16869085728219878076,
+          "panode": 205,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 15883,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h1de4f8fc13aea512E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "home/ssen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.3/src/query_as.rs",
-      "line": 168,
+      "file": "complex.rs",
+      "line": 34,
       "action": {
         "Access": {
-          "panode": 16306,
-          "function_id": 1854360365126422198,
+          "panode": 163,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 16306,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h0491e813879bf36eE"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "home/ssen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.3/src/query_as.rs",
-      "line": 168,
+      "file": "complex.rs",
+      "line": 29,
       "action": {
         "Access": {
-          "panode": 16582,
-          "function_id": 9313849297838610371,
+          "panode": 139,
+          "function_id": null,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 16582,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h1c065ff2d28ef391E"
+      "reason": "static cross-user overlap (2 principals)"
     },
     {
-      "file": "home/ssen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.3/src/query_as.rs",
-      "line": 168,
+      "file": "complex.rs",
+      "line": 33,
       "action": {
         "Access": {
-          "panode": 16905,
-          "function_id": 6217577583658167471,
+          "panode": 224,
+          "function_id": 13857819593428231686,
           "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 16905,
+          "call_name": null,
+          "schedule_site": null,
           "resource": null
         }
       },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17ha329f6e1083764d0E"
-    },
-    {
-      "file": "home/ssen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.3/src/query_as.rs",
-      "line": 168,
-      "action": {
-        "Access": {
-          "panode": 17277,
-          "function_id": 2266720140611964907,
-          "access": "Read",
-          "call_name": "fetch_optional",
-          "schedule_site": 17277,
-          "resource": null
-        }
-      },
-      "reason": "data access (data-read): _ZN9sqlx_core8query_as25QueryAs$LT$DB$C$O$C$A$GT$14fetch_optional17h8d8acc30bab26243E"
+      "reason": "static cross-user overlap (2 principals)"
     }
   ]
 }

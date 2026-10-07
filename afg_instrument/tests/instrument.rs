@@ -40,12 +40,16 @@ fn adds_runtime_dep_and_qualified_macros() {
                 call_name: None,
                 schedule_site: None,
                 resource: None,
+                resource_arg: None,
+                resource_prefix: None,
+                resource_from_return: None,
+                resource_expr: None,
             },
             reason: "test".into(),
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
 
     // Gap 1: the instrumented app depends on afg_runtime.
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
@@ -83,12 +87,16 @@ fn basename_fallback_locates_file() {
                 call_name: None,
                 schedule_site: None,
                 resource: None,
+                resource_arg: None,
+                resource_prefix: None,
+                resource_from_return: None,
+                resource_expr: None,
             },
             reason: "test".into(),
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(code.contains("afg_runtime::afg_access!(node = 7"), "basename fallback failed:\n{code}");
@@ -123,12 +131,16 @@ fn inserts_schedule_point_before_gated_access() {
                 call_name: Some("create".into()),
                 schedule_site: Some(911),
                 resource: None,
+                resource_arg: None,
+                resource_prefix: None,
+                resource_from_return: None,
+                resource_expr: None,
             },
             reason: "llm access".into(),
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     // the replay gate is inserted, awaited, and precedes the access record
@@ -165,12 +177,14 @@ fn inserts_afg_auth_at_auth_site() {
             line: 2,
             action: SiteAction::Auth {
                 call_name: "decode".into(),
+                principal_from_return: None,
+                principal_expr: None,
             },
             reason: "auth point".into(),
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
@@ -203,16 +217,94 @@ fn skips_afg_auth_for_byte_principal() {
             line: 2,
             action: SiteAction::Auth {
                 call_name: "verify_password".into(),
+                principal_from_return: None,
+                principal_expr: None,
             },
             reason: "auth point".into(),
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path()).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
         !code.contains("afg_auth!"),
         "afg_auth! should be skipped for a byte-slice (password) first argument:\n{code}"
     );
+}
+
+// Regression: a crate that receives ONLY a tokio::spawn wrap (no plan site) must
+// still get the afg_runtime dependency. Previously the dep was added before the
+// spawn-wrap pass, so a spawn-only crate was left without it and failed to compile.
+#[test]
+fn spawn_only_crate_still_gets_runtime_dep() {
+    let src = fresh("afg_instr_spawn_src");
+    let dst = fresh("afg_instr_spawn_dst");
+    fs::create_dir_all(src.join("src")).unwrap();
+    fs::write(
+        src.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    // A tokio::spawn but NO plan site targeting this file.
+    fs::write(
+        src.join("src/main.rs"),
+        "fn main() {\n    let h = tokio::spawn(async move { work().await; });\n}\n",
+    )
+    .unwrap();
+
+    // Empty plan: the only injection is the spawn wrap.
+    let plan = InstrumentationPlan { sites: vec![] };
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+
+    let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
+    assert!(
+        code.contains("afg_runtime::with_current_context"),
+        "spawn was not wrapped:\n{code}"
+    );
+    let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains("afg_runtime"),
+        "spawn-only crate did not get the afg_runtime dep:\n{manifest}"
+    );
+}
+
+// Source-DAO end to end through instrument_project: a rule captures the per-instance
+// resource at a `let` binding, and the crate gets the afg_runtime dep.
+#[test]
+fn source_dao_rule_injects_and_adds_dep() {
+    use afg_instrument::SourceDaoRule;
+    let src = fresh("afg_instr_srcdao_src");
+    let dst = fresh("afg_instr_srcdao_dst");
+    fs::create_dir_all(src.join("src")).unwrap();
+    fs::write(
+        src.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("src/main.rs"),
+        "async fn h(local_user_view: LocalUserView) {\n    let pm = Thing::read(&mut p, id).await.unwrap();\n}\n",
+    )
+    .unwrap();
+
+    let rules = vec![SourceDaoRule {
+        call: "Thing::read".into(),
+        kind: "Read".into(),
+        prefix: "thing".into(),
+        id_expr: ".id".into(),
+        resource_id_expr: None,
+        count: 1,
+        authorized_expr: None,
+        principal_param: Some("local_user_view".into()),
+        principal_expr: Some("local_user_view.person.id".into()),
+    }];
+    let plan = InstrumentationPlan { sites: vec![] };
+    instrument_project(&src, &dst, &plan, &runtime_path(), &rules).unwrap();
+
+    let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
+    assert!(code.contains("resource = format!(\"thing:{:?}\", pm.id)"), "resource not captured:\n{code}");
+    assert!(code.contains("principal = local_user_view.person.id"), "principal not captured on access:\n{code}");
+    let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
+    assert!(manifest.contains("afg_runtime"), "source-DAO crate did not get the dep:\n{manifest}");
 }

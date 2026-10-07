@@ -36,6 +36,39 @@ tokio::task_local! {
     static AFG_CONTEXT: RefCell<AfgContext>;
 }
 
+// Fallback principal store for tasks that are NOT running inside an AFG_CONTEXT
+// scope. The common real-world case: a web framework (hyper, actix) spawns the
+// per-request task itself, outside our instrumentation, so the task-local is never
+// established and `set_auth`'s `try_with` silently fails. Keyed by the tokio task
+// id, so `set_auth` at the auth point and the later data accesses in the SAME
+// request task share the principal with no scope required. Bounded-run prototype:
+// entries are not reclaimed (task ids are not reused within a run).
+static TASK_CTX: OnceLock<Mutex<std::collections::HashMap<String, AfgContext>>> = OnceLock::new();
+
+fn task_ctx_map() -> &'static Mutex<std::collections::HashMap<String, AfgContext>> {
+    TASK_CTX.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Stable key for the current tokio task, or None outside a task context.
+fn current_task_key() -> Option<String> {
+    // The per-task principal map keys on the tokio task id. `tokio::task::try_id`
+    // (via real tokio) is stable only in tokio >= 1.44; on older pins (e.g. lemmy's
+    // 1.35) it is gated behind `--cfg tokio_unstable`. So the map's key is available
+    // only when that cfg is set (and not under the madsim shim). When it is not
+    // available this returns None and the map stays inert -- apps whose principal is
+    // captured at the access site (the source-DAO `principal =` path) do not need it,
+    // and the upstream-auth flow (afg_auth then a later access) enables the map by
+    // building with `--cfg tokio_unstable`.
+    #[cfg(all(not(madsim), tokio_unstable))]
+    {
+        tokio_real::task::try_id().map(|id| id.to_string())
+    }
+    #[cfg(not(all(not(madsim), tokio_unstable)))]
+    {
+        None
+    }
+}
+
 pub async fn with_afg_context<F, T>(ctx: AfgContext, future: F) -> T
 where
     F: Future<Output = T>,
@@ -44,6 +77,18 @@ where
 }
 
 pub fn current_context() -> AfgContext {
+    // Prefer a scoped task-local that carries a principal.
+    if let Ok(c) = AFG_CONTEXT.try_with(|ctx| ctx.borrow().clone()) {
+        if c.principal.is_some() {
+            return c;
+        }
+    }
+    // Fallback: the per-task store populated by set_auth when no scope was active.
+    if let Some(key) = current_task_key() {
+        if let Some(c) = task_ctx_map().lock().unwrap().get(&key).cloned() {
+            return c;
+        }
+    }
     AFG_CONTEXT
         .try_with(|ctx| ctx.borrow().clone())
         .unwrap_or_default()
@@ -107,11 +152,26 @@ pub fn set_auth(
         duration_ms,
     };
 
-    let _ = AFG_CONTEXT.try_with(|ctx| {
-        let mut ctx = ctx.borrow_mut();
-        ctx.principal = Some(principal.clone());
-        ctx.auth = Some(auth.clone());
-    });
+    let scoped = AFG_CONTEXT
+        .try_with(|ctx| {
+            let mut ctx = ctx.borrow_mut();
+            ctx.principal = Some(principal.clone());
+            ctx.auth = Some(auth.clone());
+        })
+        .is_ok();
+    // No active scope (framework-spawned request task): record into the per-task
+    // fallback store so the same task's later accesses see this principal.
+    if !scoped {
+        if let Some(key) = current_task_key() {
+            task_ctx_map().lock().unwrap().insert(
+                key,
+                AfgContext {
+                    principal: Some(principal.clone()),
+                    auth: Some(auth.clone()),
+                },
+            );
+        }
+    }
 
     record(Event::Auth {
         principal,
@@ -153,6 +213,12 @@ pub enum Event {
         // the instance's data.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         count: Option<u64>,
+        // Principals authorized for this resource beyond the writer (a private
+        // message's recipient, a document's collaborators), declared at write time
+        // from the resource's own data model so afg_observe does not flag a
+        // legitimate second party as a leak.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authorized: Option<Vec<String>>,
         file: &'static str,
         line: u32,
     },
@@ -241,7 +307,7 @@ pub fn access(
     file: &'static str,
     line: u32,
 ) {
-    access_resource(node, kind, function_id, None, None, file, line);
+    access_resource(node, kind, function_id, None, None, None, None, file, line);
 }
 
 /// Like [`access`] but also records the resource INSTANCE the site touched and how
@@ -249,23 +315,34 @@ pub fn access(
 /// per instance: a read of a resource by a principal that does not own it, that
 /// returns rows, is a leak; a read that returns none was dominated by an ownership
 /// check and is not.
+///
+/// `principal_override`: when the instrumenter can name the principal directly at
+/// the access (it is in scope, e.g. a handler's `local_user_view`), it passes it
+/// here. This is more robust than the task-local/task-id-map propagation (no
+/// cross-task/await concerns, no tokio task-id dependency) and is what the
+/// source-DAO pass uses. When None, the principal falls back to the current task
+/// context (set upstream by `afg_auth`).
+#[allow(clippy::too_many_arguments)]
 pub fn access_resource(
     node: PANodeId,
     kind: AccessKind,
     function_id: Option<FunctionId>,
     resource: Option<String>,
     count: Option<u64>,
+    authorized: Option<Vec<String>>,
+    principal_override: Option<String>,
     file: &'static str,
     line: u32,
 ) {
-    let ctx = current_context();
+    let principal = principal_override.or_else(|| current_context().principal);
     record(Event::Access {
-        principal: ctx.principal,
+        principal,
         node,
         kind,
         function_id,
         resource,
         count,
+        authorized,
         file,
         line,
     });
@@ -450,38 +527,29 @@ macro_rules! afg_access {
     // yields, so count is left unset. This is enough to link a write and a read on
     // the same store across different call sites.
     (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr $(,)?) => {{
-        $crate::access_resource(
-            $node,
-            $kind,
-            Some($function_id),
-            Some(($resource).to_string()),
-            None,
-            file!(),
-            line!(),
-        );
+        $crate::access_resource($node, $kind, Some($function_id), Some(($resource).to_string()), None, None, None, file!(), line!());
     }};
     // Resource-linked variants: name the instance touched and the rows it yielded.
     (node = $node:expr, kind = $kind:expr, resource = $resource:expr, count = $count:expr $(,)?) => {{
-        $crate::access_resource(
-            $node,
-            $kind,
-            None,
-            Some(($resource).to_string()),
-            Some($count as u64),
-            file!(),
-            line!(),
-        );
+        $crate::access_resource($node, $kind, None, Some(($resource).to_string()), Some($count as u64), None, None, file!(), line!());
     }};
     (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr, count = $count:expr $(,)?) => {{
-        $crate::access_resource(
-            $node,
-            $kind,
-            Some($function_id),
-            Some(($resource).to_string()),
-            Some($count as u64),
-            file!(),
-            line!(),
-        );
+        $crate::access_resource($node, $kind, Some($function_id), Some(($resource).to_string()), Some($count as u64), None, None, file!(), line!());
+    }};
+    // Resource-linked write that also declares the resource's additional authorized
+    // principals (a PM's recipient, a document's collaborators), so afg_observe does
+    // not flag a legitimate second party as a leak.
+    (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr, count = $count:expr, authorized = $authorized:expr $(,)?) => {{
+        $crate::access_resource($node, $kind, Some($function_id), Some(($resource).to_string()), Some($count as u64), Some(($authorized).into_iter().map(|x| x.to_string()).collect()), None, file!(), line!());
+    }};
+    // Principal captured DIRECTLY at the access (it is in scope), the robust path
+    // the source-DAO pass uses: no task-local / task-id-map propagation, no tokio
+    // task-id dependency, no cross-await concern.
+    (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr, count = $count:expr, principal = $principal:expr $(,)?) => {{
+        $crate::access_resource($node, $kind, Some($function_id), Some(($resource).to_string()), Some($count as u64), None, Some(format!("{:?}", $principal)), file!(), line!());
+    }};
+    (node = $node:expr, kind = $kind:expr, function = $function_id:expr, resource = $resource:expr, count = $count:expr, authorized = $authorized:expr, principal = $principal:expr $(,)?) => {{
+        $crate::access_resource($node, $kind, Some($function_id), Some(($resource).to_string()), Some($count as u64), Some(($authorized).into_iter().map(|x| x.to_string()).collect()), Some(format!("{:?}", $principal)), file!(), line!());
     }};
 }
 

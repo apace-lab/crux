@@ -1,0 +1,2 @@
+      taint analysis: app_crate="atuin_server_postgres", 35 semantic points, 0 principals, 0 tagged nodes
+      dominance: 35 data-access site(s), 0 dominated, 0 unreachable, 35 UN-DOMINATED candidate(s); 0 check site(s), 0 shared-infra pointee(s) excluded

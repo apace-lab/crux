@@ -1,0 +1,10 @@
+### GATE OFF (AFG_NO_TYPE_GATE=1) ###
+      debug-info: 52 struct type(s), 28 value->type link(s) recovered
+      dominance: 1 data-access site(s), 1 dominated, 0 unreachable, 0 UN-DOMINATED candidate(s); 1 check site(s), 0 shared-infra pointee(s) excluded
+      dominance (debug-types): 0 check(s) and 0 access(es) carry a recovered struct type for resource binding
+
+### GATE ON ###
+      debug-info: 52 struct type(s), 28 value->type link(s) recovered
+      dominance: 1 data-access site(s), 0 dominated, 0 unreachable, 1 UN-DOMINATED candidate(s); 1 check site(s), 0 shared-infra pointee(s) excluded
+      dominance (debug-types): 1 check(s) and 1 access(es) carry a recovered struct type for resource binding
+        [candidate] access#10 in ..._ZN13typegate_demo7handler17hc0b034d9b0b14b6bE
