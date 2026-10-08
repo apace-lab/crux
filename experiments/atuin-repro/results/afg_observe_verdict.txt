@@ -1,0 +1,89 @@
+=== observation ===
+{
+  "accesses": [
+    {
+      "seed": null,
+      "seq": 1,
+      "principal": "user:1",
+      "panode": 9400,
+      "access": "Write",
+      "function_id": 940001,
+      "site": null,
+      "resource": "store:94b59960-cf4b-4ffb-b6a6-98a57959f779",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 2,
+      "principal": "user:2",
+      "panode": 9400,
+      "access": "Write",
+      "function_id": 940001,
+      "site": null,
+      "resource": "store:50a36c4b-6295-469d-8ed7-2c222ba4ff1d",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 3,
+      "principal": "user:2",
+      "panode": 9400,
+      "access": "Read",
+      "function_id": 940002,
+      "site": null,
+      "resource": "store:50a36c4b-6295-469d-8ed7-2c222ba4ff1d",
+      "count": 1
+    }
+  ],
+  "principals": {
+    "user:1": {
+      "functions": [
+        940001
+      ],
+      "read_nodes": [],
+      "write_nodes": [
+        9400
+      ]
+    },
+    "user:2": {
+      "functions": [
+        940001,
+        940002
+      ],
+      "read_nodes": [
+        9400
+      ],
+      "write_nodes": [
+        9400
+      ]
+    }
+  },
+  "overlaps": [
+    {
+      "left": "user:1",
+      "right": "user:2",
+      "shared_nodes": [
+        9400
+      ]
+    }
+  ],
+  "resource_leaks": []
+}
+=== schedules (1) ===
+[
+  {
+    "reason": "cross-user overlap on PANode 9400 (user:1 vs user:2)",
+    "panode": 9400,
+    "resource": null,
+    "steps": [
+      {
+        "principal": "user:1",
+        "site": 9400
+      },
+      {
+        "principal": "user:2",
+        "site": 9400
+      }
+    ]
+  }
+]

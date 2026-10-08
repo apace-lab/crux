@@ -1,0 +1,86 @@
+=== observation ===
+{
+  "accesses": [
+    {
+      "seed": null,
+      "seq": 1,
+      "principal": "alice",
+      "panode": 9500,
+      "access": "Read",
+      "function_id": 950001,
+      "site": null,
+      "resource": "file:alice/secret.txt",
+      "count": 1
+    },
+    {
+      "seed": null,
+      "seq": 2,
+      "principal": "bob",
+      "panode": 9500,
+      "access": "Read",
+      "function_id": 950001,
+      "site": null,
+      "resource": "file:alice/secret.txt",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 3,
+      "principal": "bob",
+      "panode": 9500,
+      "access": "Read",
+      "function_id": 950001,
+      "site": null,
+      "resource": "file:bob/secret.txt",
+      "count": 1
+    }
+  ],
+  "principals": {
+    "alice": {
+      "functions": [
+        950001
+      ],
+      "read_nodes": [
+        9500
+      ],
+      "write_nodes": []
+    },
+    "bob": {
+      "functions": [
+        950001
+      ],
+      "read_nodes": [
+        9500
+      ],
+      "write_nodes": []
+    }
+  },
+  "overlaps": [
+    {
+      "left": "alice",
+      "right": "bob",
+      "shared_nodes": [
+        9500
+      ]
+    }
+  ],
+  "resource_leaks": []
+}
+=== schedules (1) ===
+[
+  {
+    "reason": "cross-user overlap on PANode 9500 (alice vs bob)",
+    "panode": 9500,
+    "resource": null,
+    "steps": [
+      {
+        "principal": "alice",
+        "site": 9500
+      },
+      {
+        "principal": "bob",
+        "site": 9500
+      }
+    ]
+  }
+]

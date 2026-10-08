@@ -1,0 +1,3 @@
+{"count":0,"event":"access","file":"crates/atuin-server-postgres/src/lib.rs","function_id":940001,"kind":"Write","line":560,"node":9400,"principal":"user:1","resource":"store:94b59960-cf4b-4ffb-b6a6-98a57959f779","seed":null,"seq":1}
+{"count":0,"event":"access","file":"crates/atuin-server-postgres/src/lib.rs","function_id":940001,"kind":"Write","line":560,"node":9400,"principal":"user:2","resource":"store:50a36c4b-6295-469d-8ed7-2c222ba4ff1d","seed":null,"seq":2}
+{"count":1,"event":"access","file":"crates/atuin-server-postgres/src/lib.rs","function_id":940002,"kind":"Read","line":647,"node":9400,"principal":"user:2","resource":"store:50a36c4b-6295-469d-8ed7-2c222ba4ff1d","seed":null,"seq":3}

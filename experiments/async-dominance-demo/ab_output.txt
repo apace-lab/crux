@@ -1,0 +1,10 @@
+### OFF (AFG_NO_COROUTINE_DOM=1, plain dominance) ###
+      dominance: 4 data-access site(s), 1 dominated, 0 unreachable, 3 UN-DOMINATED candidate(s); 2 check site(s), 0 shared-infra pointee(s) excluded
+        [candidate] access#28 in ...10async_demo7guarded28_$u7b$$u7b$closure$u7d$$u7d$17hb2c3441699a3e5e7E
+        [candidate] access#47 in ...async_demo9unguarded28_$u7b$$u7b$closure$u7d$$u7d$17h60bd849f302abbb0E
+        [candidate] access#50 in ...async_demo9unguarded28_$u7b$$u7b$closure$u7d$$u7d$17h60bd849f302abbb0E
+
+### ON (coroutine-aware dominance) ###
+      dominance: 4 data-access site(s), 2 dominated, 0 unreachable, 2 UN-DOMINATED candidate(s); 2 check site(s), 0 shared-infra pointee(s) excluded
+        [candidate] access#47 in ...async_demo9unguarded28_$u7b$$u7b$closure$u7d$$u7d$17h60bd849f302abbb0E
+        [candidate] access#50 in ...async_demo9unguarded28_$u7b$$u7b$closure$u7d$$u7d$17h60bd849f302abbb0E

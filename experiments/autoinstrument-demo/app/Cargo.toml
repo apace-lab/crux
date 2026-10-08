@@ -1,0 +1,8 @@
+[package]
+name = "autoinstr_demo"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "autoinstr_demo"
+path = "src/main.rs"

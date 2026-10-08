@@ -1,0 +1,3 @@
+{"count":1,"event":"access","file":"src/server.rs","function_id":950001,"kind":"Read","line":200,"node":9500,"principal":"alice","resource":"file:alice/secret.txt","seed":null,"seq":1}
+{"count":0,"event":"access","file":"src/server.rs","function_id":950001,"kind":"Read","line":194,"node":9500,"principal":"bob","resource":"file:alice/secret.txt","seed":null,"seq":2}
+{"count":1,"event":"access","file":"src/server.rs","function_id":950001,"kind":"Read","line":200,"node":9500,"principal":"bob","resource":"file:bob/secret.txt","seed":null,"seq":3}

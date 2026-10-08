@@ -1,0 +1,354 @@
+{
+  "sites": [
+    {
+      "file": "complex.rs",
+      "line": 30,
+      "action": {
+        "Auth": {
+          "call_name": "is_accessible"
+        }
+      },
+      "reason": "auth point: is_accessible"
+    },
+    {
+      "file": "complex.rs",
+      "line": 30,
+      "action": {
+        "Auth": {
+          "call_name": "is_accessible"
+        }
+      },
+      "reason": "auth point: is_accessible"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 205,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": "to_json",
+          "schedule_site": 205,
+          "resource": null
+        }
+      },
+      "reason": "data access (data-read): _ZN7complex7to_json17h94dc01aa3ab612bfE"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 218,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": "to_json",
+          "schedule_site": 218,
+          "resource": null
+        }
+      },
+      "reason": "data access (data-read): _ZN7complex7to_json28_$u7b$$u7b$closure$u7d$$u7d$17hacd03f5bf5fe9b3eE"
+    },
+    {
+      "file": "complex.rs",
+      "line": 40,
+      "action": {
+        "Access": {
+          "panode": 343,
+          "function_id": 16969644219317634198,
+          "access": "Read",
+          "call_name": "to_json",
+          "schedule_site": 343,
+          "resource": null
+        }
+      },
+      "reason": "data access (data-read): _ZN7complex7to_json17h94dc01aa3ab612bfE"
+    },
+    {
+      "file": "complex.rs",
+      "line": 40,
+      "action": {
+        "Access": {
+          "panode": 361,
+          "function_id": 16969644219317634198,
+          "access": "Read",
+          "call_name": "to_json",
+          "schedule_site": 361,
+          "resource": null
+        }
+      },
+      "reason": "data access (data-read): _ZN7complex7to_json28_$u7b$$u7b$closure$u7d$$u7d$17hacd03f5bf5fe9b3eE"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 219,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 220,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 222,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 29,
+      "action": {
+        "Access": {
+          "panode": 134,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 218,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 34,
+      "action": {
+        "Access": {
+          "panode": 164,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 34,
+      "action": {
+        "Access": {
+          "panode": 170,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 235,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 34,
+      "action": {
+        "Access": {
+          "panode": 174,
+          "function_id": null,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 30,
+      "action": {
+        "Access": {
+          "panode": 195,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 223,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 30,
+      "action": {
+        "Access": {
+          "panode": 199,
+          "function_id": null,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 221,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 239,
+          "function_id": null,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 205,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 34,
+      "action": {
+        "Access": {
+          "panode": 163,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 29,
+      "action": {
+        "Access": {
+          "panode": 139,
+          "function_id": null,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    },
+    {
+      "file": "complex.rs",
+      "line": 33,
+      "action": {
+        "Access": {
+          "panode": 224,
+          "function_id": 13857819593428231686,
+          "access": "Read",
+          "call_name": null,
+          "schedule_site": null,
+          "resource": null
+        }
+      },
+      "reason": "static cross-user overlap (2 principals)"
+    }
+  ]
+}

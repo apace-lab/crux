@@ -94,6 +94,11 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
         };
 
         let mut by_resource: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+        // Authorized-principal set per resource (mirrors afg_observe): every writer, plus
+        // any extra parties a write declares via `authorized`. An authorized reader is a
+        // legitimate second party (a PM's recipient, a document's collaborators), not a leak,
+        // so no schedule is generated to explore it.
+        let mut authorized_by_resource: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for a in &accesses {
             let Some(res) = a.get("resource").and_then(|x| x.as_str()) else { continue };
             let Some(p) = a.get("principal").and_then(|x| x.as_str()) else { continue };
@@ -108,13 +113,28 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
             } else {
                 entry.1.insert(p.to_string());
             }
+            let az = authorized_by_resource.entry(res.to_string()).or_default();
+            if is_write {
+                az.insert(p.to_string());
+            }
+            if let Some(list) = a.get("authorized").and_then(|x| x.as_array()) {
+                for n in list {
+                    if let Some(s) = n.as_str() {
+                        az.insert(s.to_string());
+                    }
+                }
+            }
         }
 
         for (resource, (writers, readers)) in &by_resource {
             let mut made = false;
+            let authz = authorized_by_resource.get(resource);
             for w in writers {
                 for r in readers {
                     if w == r {
+                        continue;
+                    }
+                    if authz.map_or(false, |s| s.contains(r)) {
                         continue;
                     }
                     let (Some((ws, wnode)), Some((rs, _))) = (

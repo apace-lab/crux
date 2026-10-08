@@ -1,0 +1,134 @@
+=== observation ===
+{
+  "accesses": [
+    {
+      "seed": null,
+      "seq": 1,
+      "principal": "3e17d6ad-72bf-4043-a717-99887c80110e",
+      "panode": 9300,
+      "access": "Write",
+      "function_id": 930001,
+      "site": null,
+      "resource": "cipher:ca000000-0000-0000-0000-000000000001",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 2,
+      "principal": "3e17d6ad-72bf-4043-a717-99887c80110e",
+      "panode": 9300,
+      "access": "Write",
+      "function_id": 930001,
+      "site": null,
+      "resource": "cipher:cb000000-0000-0000-0000-000000000002",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 3,
+      "principal": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+      "panode": 9300,
+      "access": "Read",
+      "function_id": 930001,
+      "site": null,
+      "resource": "cipher:ca000000-0000-0000-0000-000000000001",
+      "count": 1
+    },
+    {
+      "seed": null,
+      "seq": 4,
+      "principal": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+      "panode": 9300,
+      "access": "Write",
+      "function_id": 930001,
+      "site": null,
+      "resource": "cipher:cb000000-0000-0000-0000-000000000002",
+      "count": 0
+    },
+    {
+      "seed": null,
+      "seq": 5,
+      "principal": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+      "panode": 9300,
+      "access": "Write",
+      "function_id": 930002,
+      "site": null,
+      "resource": "cipher:cb000000-0000-0000-0000-000000000002",
+      "count": 0
+    }
+  ],
+  "principals": {
+    "3e17d6ad-72bf-4043-a717-99887c80110e": {
+      "functions": [
+        930001
+      ],
+      "read_nodes": [],
+      "write_nodes": [
+        9300
+      ]
+    },
+    "c033c3f6-59aa-4da1-b4f8-02d968af05e7": {
+      "functions": [
+        930001,
+        930002
+      ],
+      "read_nodes": [
+        9300
+      ],
+      "write_nodes": [
+        9300
+      ]
+    }
+  },
+  "overlaps": [
+    {
+      "left": "3e17d6ad-72bf-4043-a717-99887c80110e",
+      "right": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+      "shared_nodes": [
+        9300
+      ]
+    }
+  ],
+  "resource_leaks": [
+    {
+      "resource": "cipher:ca000000-0000-0000-0000-000000000001",
+      "panode": 9300,
+      "owner": "3e17d6ad-72bf-4043-a717-99887c80110e",
+      "reader": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+      "rows": 1
+    }
+  ]
+}
+=== schedules (2) ===
+[
+  {
+    "reason": "cross-user leak on resource cipher:ca000000-0000-0000-0000-000000000001 (3e17d6ad-72bf-4043-a717-99887c80110e writes before c033c3f6-59aa-4da1-b4f8-02d968af05e7 reads, linked across PANodes)",
+    "panode": 9300,
+    "resource": "cipher:ca000000-0000-0000-0000-000000000001",
+    "steps": [
+      {
+        "principal": "3e17d6ad-72bf-4043-a717-99887c80110e",
+        "site": 9300
+      },
+      {
+        "principal": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+        "site": 9300
+      }
+    ]
+  },
+  {
+    "reason": "cross-user overlap on PANode 9300 (3e17d6ad-72bf-4043-a717-99887c80110e vs c033c3f6-59aa-4da1-b4f8-02d968af05e7)",
+    "panode": 9300,
+    "resource": null,
+    "steps": [
+      {
+        "principal": "3e17d6ad-72bf-4043-a717-99887c80110e",
+        "site": 9300
+      },
+      {
+        "principal": "c033c3f6-59aa-4da1-b4f8-02d968af05e7",
+        "site": 9300
+      }
+    ]
+  }
+]

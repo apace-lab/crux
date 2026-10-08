@@ -1,0 +1,8 @@
+### coroutine dominance OFF (plain) ###
+      dominance: 2 data-access site(s), 0 dominated, 0 unreachable, 2 UN-DOMINATED candidate(s); 1 check site(s), 0 shared-infra pointee(s) excluded
+        [candidate] access#25 in ...7complex10get_cipher28_$u7b$$u7b$closure$u7d$$u7d$17h5d71340cd33ec17aE
+        [candidate] access#37 in ...lex15get_cipher_leak28_$u7b$$u7b$closure$u7d$$u7d$17h103fd8bb17b8e4b5E
+
+### full (coroutine dominance + capture identity + dedup) ###
+      dominance: 2 data-access site(s), 1 dominated, 0 unreachable, 1 UN-DOMINATED candidate(s); 1 check site(s), 0 shared-infra pointee(s) excluded
+        [candidate] access#37 in ...lex15get_cipher_leak28_$u7b$$u7b$closure$u7d$$u7d$17h103fd8bb17b8e4b5E

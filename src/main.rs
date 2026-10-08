@@ -35,6 +35,11 @@ struct Cli {
     #[arg(long, default_value = "../rail-rs/signatures/data_access_functions.json")]
     data_access: PathBuf,
 
+    /// Source-level DAO capture catalog (JSON): recovers per-instance resources for
+    /// ORM calls the IR erases via `#[async_trait]`. Missing file means no rules.
+    #[arg(long, default_value = "../rail-rs/signatures/source_dao_functions.json")]
+    source_dao: PathBuf,
+
     /// Path to the afg_runtime crate, added as a dependency to the instrumented app
     #[arg(long, default_value = "afg_runtime")]
     afg_runtime: PathBuf,
@@ -105,13 +110,29 @@ fn node_loc(engine: &rail_rs::TaintAnalysis<'_>, node_id: usize) -> Option<(Stri
 /// point. Only principal-establishing points get an `afg_auth!` site. Keying this
 /// on the matched catalog function (which the taint analysis already resolved) is
 /// more reliable than inspecting the source line at instrument time.
-fn establishes_principal(matched_fn_name: &str) -> bool {
+fn establishes_principal(matched_fn_name: &str, principal_from_return: bool) -> bool {
+    // An entry that explicitly declares the principal in the call's return value
+    // (e.g. the app's own auth fn `Claims::validate -> LocalUserId`) always
+    // establishes the principal; honor it regardless of the name.
+    if principal_from_return {
+        return true;
+    }
     let short = matched_fn_name
         .rsplit("::")
         .next()
         .unwrap_or(matched_fn_name);
-    let credential_check = short == "verify_password"       // argon2 PasswordVerifier
-        || matched_fn_name.starts_with("bcrypt::verify");   // bcrypt::verify
+    // Credential / token-verification functions authenticate but their FIRST
+    // ARGUMENT is a secret or token, not the user's identity, so they must not be
+    // wrapped as a first-arg principal:
+    //   - argon2 PasswordVerifier::verify_password / bcrypt::verify take the password;
+    //   - jsonwebtoken::decode / decode_header take the raw JWT. The identity is the
+    //     DECODED claims, which the app surfaces at its own auth point (cataloged
+    //     with principal_from_return), not this generic verify call. Matching the
+    //     JWT string as the principal (what happened before) is simply wrong.
+    // The principal is established at that separate identity point instead.
+    let credential_check = short == "verify_password"
+        || matched_fn_name.starts_with("bcrypt::verify")
+        || matched_fn_name.starts_with("jsonwebtoken::");
     !credential_check
 }
 
@@ -235,11 +256,66 @@ fn run_pag_and_afg(
     // Load the signature catalogs so the PAG records semantic (LLM/AC/data) points.
     let llm_sigs = rail_rs::signature::load_signatures(llm_api)
         .map_err(|e| anyhow::anyhow!("failed to load LLM catalog {}: {e}", llm_api.display()))?;
-    let ac_sigs = rail_rs::signature::load_signatures(ac)
+    let mut ac_sigs = rail_rs::signature::load_signatures(ac)
         .map_err(|e| anyhow::anyhow!("failed to load AC catalog {}: {e}", ac.display()))?;
     let data_sigs = rail_rs::signature::load_signatures(data_access).map_err(|e| {
         anyhow::anyhow!("failed to load data-store catalog {}: {e}", data_access.display())
     })?;
+
+    // AFG_INFER_CHECKS: derive application access-control checks structurally (a call whose
+    // boolean result controls a guard branch) and add them as synthetic authorization
+    // signatures, so bespoke app checks (e.g. `is_accessible_to_user`) need not be cataloged
+    // by hand. Opt-in and heuristic; see rail_rs::guard_inference.
+    // AFG_INFER_CHECKS: structurally derive candidate application access-control checks (calls
+    // whose boolean result controls a guard branch). It has high recall (it surfaces the real
+    // app checks, e.g. `is_accessible_to_user`), but over-approximates: it also proposes
+    // operators and predicates, so using it to *clear* accesses is unsound (it can hide a real
+    // leak). By default it therefore only SUGGESTS the catalog (prints the list for curation);
+    // set AFG_INFER_CHECKS=apply to actually add them (unsound, for experiments only).
+    if let Ok(mode) = std::env::var("AFG_INFER_CHECKS") {
+        let app = std::env::var("AFG_APP_CRATE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| rail_rs::detect_app_crate(modules.iter()));
+        // Data-access catalog names (reduced to last-two segments) let guard inference require
+        // that a candidate check's protected arm actually performs a data-access.
+        let last2 = |s: &str| -> String {
+            let p: Vec<&str> = s.rsplitn(3, "::").collect();
+            if p.len() >= 2 { format!("{}::{}", p[1], p[0]) } else { s.to_string() }
+        };
+        let data_names: std::collections::BTreeSet<String> =
+            data_sigs.iter().map(|s| last2(&s.fn_name)).collect();
+        let inferred =
+            rail_rs::guard_inference::inferred_check_functions(modules.iter(), &app, &data_names);
+        let data_names: std::collections::BTreeSet<&str> =
+            data_sigs.iter().map(|s| s.fn_name.as_str()).collect();
+        // a serve is never its own check
+        let suggestions: Vec<&String> =
+            inferred.iter().filter(|f| !data_names.contains(f.as_str())).collect();
+        println!(
+            "      guard inference (SUGGESTIONS, review before trusting): {} candidate check fn(s): {:?}",
+            suggestions.len(),
+            suggestions.iter().take(20).collect::<Vec<_>>()
+        );
+        if mode == "apply" {
+            let before = ac_sigs.len();
+            for fq in &suggestions {
+                if ac_sigs.iter().any(|s| &s.fn_name == *fq) {
+                    continue;
+                }
+                ac_sigs.push(rail_rs::signature::Signature {
+                    fn_name: (*fq).clone(),
+                    category: Some("authorization".to_string()),
+                    ..Default::default()
+                });
+            }
+            println!(
+                "      guard inference: APPLIED {} inferred check(s) to the AC catalog (UNSOUND: may hide leaks; experiments only)",
+                ac_sigs.len() - before
+            );
+        }
+    }
+
     println!(
         "      catalogs: {} LLM, {} AC, {} data-store signatures",
         llm_sigs.len(),
@@ -247,6 +323,17 @@ fn run_pag_and_afg(
         data_sigs.len()
     );
     analysis.set_context_catalogs(llm_sigs, ac_sigs, data_sigs);
+
+    // Recover debug-info struct types from the textual IR (see rail_rs::debuginfo). The
+    // dominance pass uses them to keep resources of different concrete types from binding
+    // when opaque-pointer points-to over-merges them. Harmless when the IR has no debug info.
+    let debug_types = rail_rs::debuginfo::DebugTypes::parse_files(llvm_ir.iter());
+    println!(
+        "      debug-info: {} struct type(s), {} value->type link(s) recovered",
+        debug_types.composite_count(),
+        debug_types.value_link_count()
+    );
+    analysis.set_debug_types(debug_types);
 
     // Build the PAG (afg mode) and run the taint analysis.
     let engine = analysis.taint_analysis("afg", None);
@@ -259,6 +346,379 @@ fn run_pag_and_afg(
     );
 
     use rail_rs::taint_analysis::SemanticPointKind;
+
+    // --- Access-control dominance analysis (automated enforcement pass) ---
+    // Enumerate data-access sites not dominated, on all paths, by an access-control check
+    // bound to the accessed resource (the leak candidates). Block-level dominance comes
+    // from the per-function dominator trees; resource binding from the points-to sets.
+    // See rail_rs::dominance.
+    {
+        use rail_rs::dominance::{self, AccessSite, CallSite, CheckSite, DominanceFacts, PrecomputedOracle};
+        use rail_rs::CFGNode;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let app = engine.app_crate.clone();
+        let in_app = |name: &str| app.is_empty() || name.contains(app.as_str());
+
+        // Propagate recovered debug types through the SSA dataflow so temporaries (the
+        // actual resource pointers at real access sites, e.g. GEP results and spill loads)
+        // carry a struct type, not just named source variables.
+        // AFG_NO_TYPE_GATE disables the debug-type gate (for A/B comparison on identical IR).
+        let type_gate_on = std::env::var("AFG_NO_TYPE_GATE").is_err();
+        let value_types = if type_gate_on {
+            analysis.debug_types().map(|dt| dt.propagate_types(modules.iter()))
+        } else {
+            None
+        };
+
+        // A shared-infrastructure type: a DB connection / pool / transaction handle, which is
+        // an argument to nearly every data call but is not a per-user resource. Recognized by
+        // its recovered debug type, so it can be excluded on principle rather than by the
+        // frequency heuristic.
+        let is_infra_type = |tok: &str| -> bool {
+            let last = tok.rsplit("::").next().unwrap_or(tok);
+            ["Connection", "DbConn", "Pool", "Transaction", "Executor", "Client"]
+                .iter()
+                .any(|m| last.contains(m))
+        };
+        // Resource set of a site = points-to targets of its argument nodes, excluding args
+        // whose recovered debug type is shared infrastructure (a connection/pool/transaction).
+        let node_pts = |ids: &[usize]| -> BTreeSet<u64> {
+            let mut s = BTreeSet::new();
+            for id in ids {
+                if let Some(n) = engine.nodes.get(id) {
+                    if let (Some((func, val)), Some(vt)) = (n.ssa_ref(), value_types.as_ref()) {
+                        if vt.token(func, &val).map(is_infra_type).unwrap_or(false) {
+                            continue; // skip connection/pool handles
+                        }
+                    }
+                    for p in &n.points_to {
+                        s.insert(*p as u64);
+                    }
+                }
+            }
+            s
+        };
+
+        // Stable hash of a debug-type signature string into the type-tag id space (a set
+        // disjoint in purpose from the points-to resource ids).
+        let hash_type = |s: &str| -> u64 {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            s.hash(&mut h);
+            h.finish()
+        };
+
+        // Debug-type tag of a site = the propagated struct type token(s) of its pointer
+        // argument SSA values (named vars AND temporaries). Empty when no debug info
+        // resolves (then the dominance pass falls back to pure points-to binding).
+        let type_tag_of = |arg_ids: &[usize], store_ids: &[usize]| -> BTreeSet<u64> {
+            let mut s = BTreeSet::new();
+            let Some(vt) = value_types.as_ref() else { return s };
+            for id in arg_ids.iter().chain(store_ids.iter()) {
+                if let Some(n) = engine.nodes.get(id) {
+                    if let Some((func, val)) = n.ssa_ref() {
+                        if let Some(tok) = vt.token(func, &val) {
+                            s.insert(hash_type(tok));
+                        }
+                    }
+                }
+            }
+            s
+        };
+
+        // Diagnostic: dump the resource nodes at the first few sites and whether each types.
+        if std::env::var("AFG_DEBUG_TYPETAG").is_ok() {
+            if let Some(vt) = value_types.as_ref() {
+                eprintln!("[TYPETAG] propagate_types total typed values = {}", vt.len());
+                for (f, v, t) in vt.sample(8) {
+                    let ft: String = f.chars().rev().take(34).collect::<String>().chars().rev().collect();
+                    eprintln!("    sample: fn=...{} {} -> {}", ft, v, t);
+                }
+            }
+            let mut shown = 0;
+            for p in engine.semantic_points.iter() {
+                let is_site = matches!(
+                    p.kind,
+                    SemanticPointKind::DataAccess { .. }
+                        | SemanticPointKind::AccessControl { .. }
+                        | SemanticPointKind::AccessControlRecovery { .. }
+                );
+                if !is_site {
+                    continue;
+                }
+                let callee = p.callee.clone().unwrap_or_default();
+                let tail: String = callee.chars().rev().take(40).collect::<String>().chars().rev().collect();
+                eprintln!("[TYPETAG] site callee=...{} store_args={} result={:?}", tail, p.store_arg_nodes.len(), p.result_node);
+                for id in p.store_arg_nodes.iter().chain(p.result_node.iter()) {
+                    if let Some(n) = engine.nodes.get(id) {
+                        let sr = n.ssa_ref();
+                        let (func, name) = sr.clone().map(|(f, v)| (f.to_string(), v)).unwrap_or_default();
+                        let tok = value_types.as_ref().and_then(|vt| vt.token(&func, &name).map(|t| t.to_string()));
+                        let nfor = value_types.as_ref().map(|vt| vt.count_for(&func)).unwrap_or(0);
+                        let ftail: String = func.chars().rev().take(30).collect::<String>().chars().rev().collect();
+                        eprintln!("    node#{} name={:?} fn=...{} typed_in_fn={} token={:?}", id, name, ftail, nfor, tok);
+                    }
+                }
+                shown += 1;
+                if shown >= 12 {
+                    break;
+                }
+            }
+        }
+
+        // Prefer the `async fn` construction call over its coroutine-body driver. An async
+        // method call appears both as the construction `Type::method(sret, &resource, ...)`
+        // (which carries the real resource argument) and, after suffix-stripped matching, as
+        // the coroutine-body driver `Type::method::{{closure}}(sret, env)` (whose arguments
+        // are only the coroutine frame, not the resource). When a caller has both for the same
+        // method and category, the body-form site is a spurious access/check, so drop it. When
+        // only the body form exists (the construction was inlined away), keep it for coverage.
+        let is_coroutine_body = |callee: &str| -> bool {
+            callee.contains("{{closure}}") || callee.contains("{async_fn") || callee.contains("{closure#")
+        };
+        let base_method = |callee: &str| -> String {
+            let mut cur = callee;
+            while let Some(idx) = cur.rfind("::") {
+                if cur[idx + 2..].starts_with('{') {
+                    cur = &cur[..idx];
+                } else {
+                    break;
+                }
+            }
+            cur.to_string()
+        };
+        let kind_key = |p: &rail_rs::taint_analysis::SemanticPoint| -> Option<&'static str> {
+            match &p.kind {
+                SemanticPointKind::AccessControl { .. }
+                | SemanticPointKind::AccessControlRecovery { .. } => Some("ac"),
+                SemanticPointKind::DataAccess { .. } => Some("data"),
+                _ => None,
+            }
+        };
+        let mut has_construction: BTreeSet<(String, String, &'static str)> = BTreeSet::new();
+        for p in engine.semantic_points.iter() {
+            if let Some(kk) = kind_key(p) {
+                if !is_coroutine_body(&p.security_point.callee) {
+                    has_construction.insert((p.caller.clone(), base_method(&p.security_point.callee), kk));
+                }
+            }
+        }
+        let is_redundant_body = |p: &rail_rs::taint_analysis::SemanticPoint| -> bool {
+            match kind_key(p) {
+                Some(kk) => {
+                    is_coroutine_body(&p.security_point.callee)
+                        && has_construction.contains(&(
+                            p.caller.clone(),
+                            base_method(&p.security_point.callee),
+                            kk,
+                        ))
+                }
+                None => false,
+            }
+        };
+
+        // Coroutine capture identity: two sites in the same async fn that use the same env
+        // capture (same offset) touch the same resource instance, so add a per-capture token
+        // to the resource set. This binds a check and a serve that both operate on a captured
+        // resource whose reloads otherwise point to distinct objects.
+        let capture_tag_of = |arg_ids: &[usize], store_ids: &[usize]| -> BTreeSet<u64> {
+            let mut s = BTreeSet::new();
+            let Some(vt) = value_types.as_ref() else { return s };
+            for id in arg_ids.iter().chain(store_ids.iter()) {
+                if let Some(n) = engine.nodes.get(id) {
+                    if let Some((func, val)) = n.ssa_ref() {
+                        if let Some(off) = vt.capture_offset(func, &val) {
+                            s.insert(hash_type(&format!("cap:{func}:{off}")));
+                        }
+                    }
+                }
+            }
+            s
+        };
+        // Raw resource sets (+ debug-type tags), then exclude shared infrastructure (a DB
+        // pool / connection is an argument to nearly every site, so it would spuriously bind
+        // every check to every access). A pointee present in >= half of the sites is infra.
+        // Each raw site carries (pointee resources, capture tokens, type tags) separately: the
+        // shared-infra exclusion applies only to pointees; capture tokens are precise binding
+        // signals and must never be excluded (with few sites they would look "ubiquitous").
+        let mut checks_raw: Vec<(String, String, BTreeSet<u64>, BTreeSet<u64>, BTreeSet<u64>)> =
+            Vec::new();
+        let mut accs_raw: Vec<(usize, String, String, BTreeSet<u64>, BTreeSet<u64>, BTreeSet<u64>)> =
+            Vec::new();
+        for p in engine.semantic_points.iter() {
+            if is_redundant_body(p) {
+                continue;
+            }
+            match &p.kind {
+                SemanticPointKind::AccessControl { .. }
+                | SemanticPointKind::AccessControlRecovery { .. } => {
+                    checks_raw.push((
+                        p.caller.clone(),
+                        p.block.clone(),
+                        node_pts(&p.store_arg_nodes),
+                        capture_tag_of(&p.argument_nodes, &p.store_arg_nodes),
+                        type_tag_of(&p.argument_nodes, &p.store_arg_nodes),
+                    ));
+                }
+                SemanticPointKind::DataAccess { .. } => {
+                    accs_raw.push((
+                        p.callsite_id,
+                        p.caller.clone(),
+                        p.block.clone(),
+                        node_pts(&p.store_arg_nodes),
+                        capture_tag_of(&p.argument_nodes, &p.store_arg_nodes),
+                        type_tag_of(&p.argument_nodes, &p.store_arg_nodes),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        let total_sites = (checks_raw.len() + accs_raw.len()).max(1);
+        let mut freq: BTreeMap<u64, usize> = BTreeMap::new();
+        for (_, _, r, _, _) in &checks_raw {
+            for p in r {
+                *freq.entry(*p).or_default() += 1;
+            }
+        }
+        for (_, _, _, r, _, _) in &accs_raw {
+            for p in r {
+                *freq.entry(*p).or_default() += 1;
+            }
+        }
+        let ubiquitous: BTreeSet<u64> =
+            freq.iter().filter(|(_, c)| **c * 2 >= total_sites).map(|(p, _)| *p).collect();
+        // refined pointees (infra excluded) unioned with the always-kept capture tokens
+        let refine = |r: &BTreeSet<u64>, cap: &BTreeSet<u64>| -> BTreeSet<u64> {
+            let mut out: BTreeSet<u64> =
+                r.iter().filter(|p| !ubiquitous.contains(p)).copied().collect();
+            out.extend(cap.iter().copied());
+            out
+        };
+
+        let n_typed_checks = checks_raw.iter().filter(|(_, _, _, _, t)| !t.is_empty()).count();
+        let n_typed_accs = accs_raw.iter().filter(|(_, _, _, _, _, t)| !t.is_empty()).count();
+
+        let checks: Vec<CheckSite> = checks_raw
+            .iter()
+            .map(|(f, b, r, cap, t)| CheckSite {
+                function: f.clone(),
+                block: b.clone(),
+                resources: refine(r, cap),
+                type_tag: t.clone(),
+            })
+            .collect();
+        let accesses: Vec<AccessSite> = accs_raw
+            .iter()
+            .map(|(id, f, b, r, cap, t)| AccessSite {
+                id: *id,
+                function: f.clone(),
+                block: b.clone(),
+                resources: refine(r, cap),
+                type_tag: t.clone(),
+            })
+            .collect();
+
+        // Call sites with blocks (from the IR), restricted to app-crate callers.
+        let calls: Vec<CallSite> = dominance::call_sites_with_blocks(modules.iter())
+            .into_iter()
+            .filter(|c| in_app(&c.caller))
+            .collect();
+
+        // Entries: app-crate functions with no app-internal caller (call-graph roots).
+        let mut fns: BTreeSet<String> = BTreeSet::new();
+        let mut has_in: BTreeSet<String> = BTreeSet::new();
+        for c in &calls {
+            fns.insert(c.caller.clone());
+            if in_app(&c.callee) {
+                fns.insert(c.callee.clone());
+                has_in.insert(c.callee.clone());
+            }
+        }
+        for c in &checks {
+            fns.insert(c.function.clone());
+        }
+        for a in &accesses {
+            fns.insert(a.function.clone());
+        }
+        let entries: BTreeSet<String> =
+            fns.iter().filter(|f| !has_in.contains(*f)).cloned().collect();
+
+        // Precompute true dominance pairs from the per-function dominator trees, for each
+        // function that performs a check (dominator of its access and call blocks).
+        let check_fns: BTreeSet<String> = checks.iter().map(|c| c.function.clone()).collect();
+        let mut pairs: BTreeSet<(String, String, String)> = BTreeSet::new();
+        for cf in &check_fns {
+            let check_blocks: Vec<String> =
+                checks.iter().filter(|c| &c.function == cf).map(|c| c.block.clone()).collect();
+            let mut targets: BTreeSet<String> = BTreeSet::new();
+            for a in &accesses {
+                if &a.function == cf {
+                    targets.insert(a.block.clone());
+                }
+            }
+            for c in &calls {
+                if &c.caller == cf {
+                    targets.insert(c.block.clone());
+                }
+            }
+            if let Some((func, module)) = analysis.get_func_by_name(cf) {
+                let fa = analysis.module_analysis(&module.name).fn_analysis(cf);
+                // Coroutine-normalized dominance: for async fns this rewires the resume
+                // dispatch so a check before an `await` dominates a serve after it. Identical
+                // to the plain dominator tree for non-coroutine functions.
+                // AFG_NO_COROUTINE_DOM disables it (for A/B comparison on identical IR).
+                let dt = if std::env::var("AFG_NO_COROUTINE_DOM").is_ok() {
+                    fa.dominator_tree()
+                } else {
+                    fa.dominator_tree_coroutine()
+                };
+                let name_of = |bs: &str| {
+                    func.basic_blocks.iter().map(|bb| &bb.name).find(|n| n.to_string() == bs)
+                };
+                let dbg_dom = std::env::var("AFG_DEBUG_DOM").map(|v| cf.contains(&v)).unwrap_or(false);
+                for cb in &check_blocks {
+                    for tb in &targets {
+                        if let (Some(cn), Some(tn)) = (name_of(cb), name_of(tb)) {
+                            let d = dt.dominates(CFGNode::Block(cn), CFGNode::Block(tn));
+                            if dbg_dom {
+                                eprintln!("[DOM] check {cb} dominates access/target {tb} ? {d}");
+                            }
+                            if d {
+                                pairs.insert((cf.clone(), cb.clone(), tb.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let n_checks = checks.len();
+        let oracle = PrecomputedOracle { pairs };
+        let facts = DominanceFacts { checks, accesses, calls, entries };
+        let report = dominance::analyze(&facts, &oracle);
+        println!(
+            "      dominance: {} data-access site(s), {} dominated, {} unreachable, {} UN-DOMINATED candidate(s); {} check site(s), {} shared-infra pointee(s) excluded",
+            report.total_accesses,
+            report.dominated_accesses,
+            report.unreachable_accesses,
+            report.candidates.len(),
+            n_checks,
+            ubiquitous.len()
+        );
+        println!(
+            "      dominance (debug-types): {} check(s) and {} access(es) carry a recovered struct type for resource binding",
+            n_typed_checks, n_typed_accs
+        );
+        let tail = |s: &str| -> String {
+            let n = s.len();
+            s[n.saturating_sub(70)..].to_string()
+        };
+        for c in report.candidates.iter().take(50) {
+            println!("        [candidate] access#{} in ...{}", c.access_id, tail(&c.function));
+        }
+    }
+
     let mut sites: Vec<InstrumentSite> = Vec::new();
     let (mut n_auth, mut n_access, mut n_credential, mut n_data) = (0usize, 0usize, 0usize, 0usize);
 
@@ -276,7 +736,11 @@ fn run_pag_and_afg(
                 // Credential checks (argon2/bcrypt password verifiers) authenticate
                 // but do not name the user, so the principal is established at a
                 // separate token / session / identity point.
-                if !establishes_principal(matched) {
+                let p_from_return = point
+                    .security_point
+                    .principal_from_return
+                    .unwrap_or(false);
+                if !establishes_principal(matched, p_from_return) {
                     n_credential += 1;
                     continue;
                 }
@@ -293,6 +757,8 @@ fn run_pag_and_afg(
                     line,
                     action: SiteAction::Auth {
                         call_name: call_name.clone(),
+                        principal_from_return: point.security_point.principal_from_return,
+                        principal_expr: point.security_point.principal_expr.clone(),
                     },
                     reason: format!("auth point: {call_name}"),
                 });
@@ -323,6 +789,10 @@ fn run_pag_and_afg(
                         schedule_site: Some(node as u64),
                         // LLM calls are not a shared data store; no resource id.
                         resource: None,
+                        resource_arg: None,
+                        resource_prefix: None,
+                        resource_from_return: None,
+                        resource_expr: None,
                     },
                     reason: format!("llm access: {}", point.callee.as_deref().unwrap_or("?")),
                 });
@@ -355,6 +825,13 @@ fn run_pag_and_afg(
                         // the shared store this access touches (points-to), so a
                         // write and a read on the same store link across PANodes.
                         resource: data_resource_ids.get(&point.callsite_id).copied(),
+                        // the argument naming the resource INSTANCE (file path, row
+                        // id) from the catalog, so the instrumenter captures the
+                        // runtime id and the oracle gets per-instance resolution.
+                        resource_arg: point.security_point.resource_arg,
+                        resource_prefix: point.security_point.resource_prefix.clone(),
+                        resource_from_return: point.security_point.resource_from_return,
+                        resource_expr: point.security_point.resource_expr.clone(),
                     },
                     reason: format!("data access ({category}): {}", point.callee.as_deref().unwrap_or("?")),
                 });
@@ -391,6 +868,10 @@ fn run_pag_and_afg(
                     schedule_site: None,
                     // a raw overlap node is already the shared resource itself.
                     resource: None,
+                    resource_arg: None,
+                    resource_prefix: None,
+                    resource_from_return: None,
+                    resource_expr: None,
                 },
                 reason: format!("static cross-user overlap ({} principals)", principals.len()),
             });
@@ -434,11 +915,19 @@ fn main() -> Result<()> {
 
     println!("[2/6] Source instrumentation");
     let instrumented_project = cli.run_dir.join("instrumented/app");
+    // SOURCE-level DAO capture rules (catalog-driven): recover per-instance
+    // resources for ORM calls the IR erases via `#[async_trait]`. Absent file -> none.
+    let source_dao = afg_instrument::load_source_dao_rules(&cli.source_dao)
+        .with_context(|| format!("loading source-DAO catalog {}", cli.source_dao.display()))?;
+    if !source_dao.is_empty() {
+        println!("      source-DAO rules: {}", source_dao.len());
+    }
     instrument_project(
         &cli.project,
         &instrumented_project,
         &static_result.instrumentation_plan,
         &cli.afg_runtime,
+        &source_dao,
     )?;
 
     if cli.instrument_only {
@@ -559,17 +1048,29 @@ mod tests {
     }
 
     #[test]
-    fn credential_checks_are_not_principal_sources() {
-        // Password / secret verifiers: authenticate, but do not name the user.
-        assert!(!establishes_principal("argon2::PasswordVerifier::verify_password"));
-        assert!(!establishes_principal("bcrypt::verify"));
+    fn credential_and_token_checks_are_not_first_arg_principal_sources() {
+        // Password / secret verifiers and raw JWT decode: authenticate, but their
+        // first argument is a secret or token, NOT the user's identity. They must
+        // not be wrapped as a first-arg principal.
+        assert!(!establishes_principal("argon2::PasswordVerifier::verify_password", false));
+        assert!(!establishes_principal("bcrypt::verify", false));
+        assert!(!establishes_principal("jsonwebtoken::decode", false));
+        assert!(!establishes_principal("jsonwebtoken::decoding::decode", false));
     }
 
     #[test]
-    fn token_and_identity_points_are_principal_sources() {
-        // Token / session / identity points: their first argument names the user.
-        assert!(establishes_principal("jsonwebtoken::decode"));
-        assert!(establishes_principal("actix_identity::Identity::id"));
-        assert!(establishes_principal("ldap3::Ldap::simple_bind"));
+    fn identity_points_are_first_arg_principal_sources() {
+        // Token / session / identity points whose first argument names the user.
+        assert!(establishes_principal("actix_identity::Identity::id", false));
+        assert!(establishes_principal("ldap3::Ldap::simple_bind", false));
+    }
+
+    #[test]
+    fn principal_from_return_is_always_a_source() {
+        // An entry that declares the principal in its RETURN value is honored
+        // regardless of the function name (the app's own auth fn), even for a
+        // name that is otherwise a credential/token check.
+        assert!(establishes_principal("lemmy_api_common::claims::Claims::validate", true));
+        assert!(establishes_principal("jsonwebtoken::decode", true));
     }
 }
