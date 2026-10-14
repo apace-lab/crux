@@ -1,4 +1,4 @@
-use afg_instrument::{
+use afg_r4_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
 use std::{fs, path::PathBuf};
@@ -20,7 +20,7 @@ fn write_fixture(dir: &PathBuf) {
 }
 
 fn runtime_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../afg_runtime")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../afg_r4_runtime")
 }
 
 #[test]
@@ -49,21 +49,21 @@ fn adds_runtime_dep_and_qualified_macros() {
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
-    // Gap 1: the instrumented app depends on afg_runtime.
+    // Gap 1: the instrumented app depends on afg_r4_runtime.
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("afg_runtime"), "runtime dep not added:\n{manifest}");
+    assert!(manifest.contains("afg_r4_runtime"), "runtime dep not added:\n{manifest}");
 
     // Gap 1: macros are inserted fully-qualified (no `use` needed).
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
-        code.contains("afg_runtime::afg_monitor!(function = 210)"),
+        code.contains("afg_r4_runtime::afg_monitor!(function = 210)"),
         "monitor macro missing:\n{code}"
     );
     assert!(
         code.contains(
-            "afg_runtime::afg_access!(node = 1308, kind = afg_runtime::AccessKind::Read, function = 210)"
+            "afg_r4_runtime::afg_access!(node = 1308, kind = afg_r4_runtime::AccessKind::Read, function = 210)"
         ),
         "access macro missing:\n{code}"
     );
@@ -96,11 +96,11 @@ fn basename_fallback_locates_file() {
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
-    assert!(code.contains("afg_runtime::afg_access!(node = 7"), "basename fallback failed:\n{code}");
-    assert!(code.contains("afg_runtime::AccessKind::Write"), "wrong access kind:\n{code}");
+    assert!(code.contains("afg_r4_runtime::afg_access!(node = 7"), "basename fallback failed:\n{code}");
+    assert!(code.contains("afg_r4_runtime::AccessKind::Write"), "wrong access kind:\n{code}");
 }
 
 #[test]
@@ -140,12 +140,12 @@ fn inserts_schedule_point_before_gated_access() {
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     // the replay gate is inserted, awaited, and precedes the access record
     assert!(
-        code.contains("afg_runtime::afg_schedule_point!(site = 911).await;"),
+        code.contains("afg_r4_runtime::afg_schedule_point!(site = 911).await;"),
         "schedule point not inserted:\n{code}"
     );
     let gate = code.find("afg_schedule_point!").unwrap();
@@ -184,12 +184,110 @@ fn inserts_afg_auth_at_auth_site() {
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
+
+    let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
+    // The principal is wrapped in afg_principal! so any type (incl. a Debug-only
+    // newtype with no Into<String>) stringifies and compiles.
+    assert!(
+        code.contains("afg_r4_runtime::afg_auth!(principal = afg_r4_runtime::afg_principal!(user)"),
+        "afg_auth! not inserted with afg_principal!-wrapped principal:\n{code}"
+    );
+}
+
+// BUG B: an auth check in a match GUARD (`pat if check(..) => ..`) is an
+// expression position with no statement slot. The instrumenter must SKIP it (and
+// the output must still parse), not emit code that fails with "expected `=>`".
+#[test]
+fn skips_afg_auth_in_match_guard() {
+    let src = fresh("afg_instr_guard_src");
+    let dst = fresh("afg_instr_guard_dst");
+    fs::create_dir_all(src.join("src")).unwrap();
+    fs::write(
+        src.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("src/main.rs"),
+        "fn h(x: Option<C>, u: U) {\n    let _r = match x {\n        Some(c) if c.check(u) => (),\n        _ => (),\n    };\n}\n",
+    )
+    .unwrap();
+
+    let plan = InstrumentationPlan {
+        sites: vec![InstrumentSite {
+            file: "src/main.rs".into(),
+            line: 3, // the match-guard line
+            action: SiteAction::Auth {
+                call_name: "check".into(),
+                principal_from_return: None,
+                principal_expr: None,
+            },
+            reason: "auth point".into(),
+        }],
+    };
+
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
-        code.contains("afg_runtime::afg_auth!(principal = user"),
-        "afg_auth! not inserted with extracted principal:\n{code}"
+        !code.contains("afg_auth!"),
+        "afg_auth! must be skipped in a match-guard (expression) position:\n{code}"
+    );
+    assert!(
+        syn::parse_file(&code).is_ok(),
+        "skipped-site output must still parse as Rust:\n{code}"
+    );
+}
+
+// BUG B: an auth check in a multi-line (block-less) `if` CONDITION. The probe
+// must be placed BEFORE the whole `if` statement (a valid statement boundary),
+// not spliced into the middle of the condition, and the result must parse.
+#[test]
+fn places_afg_auth_before_multiline_if() {
+    let src = fresh("afg_instr_if_src");
+    let dst = fresh("afg_instr_if_dst");
+    fs::create_dir_all(src.join("src")).unwrap();
+    fs::write(
+        src.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    // The vaultwarden ciphers.rs shape: the auth call is the tail of a multi-line
+    // `||` condition. The plan line points at the call line (3).
+    fs::write(
+        src.join("src/main.rs"),
+        "fn h(u: U) {\n    if first()\n        || check(u)\n    {\n        work();\n    }\n}\n",
+    )
+    .unwrap();
+
+    let plan = InstrumentationPlan {
+        sites: vec![InstrumentSite {
+            file: "src/main.rs".into(),
+            line: 3, // the `|| check(u)` line
+            action: SiteAction::Auth {
+                call_name: "check".into(),
+                principal_from_return: None,
+                principal_expr: None,
+            },
+            reason: "auth point".into(),
+        }],
+    };
+
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
+
+    let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
+    assert!(
+        code.contains("afg_r4_runtime::afg_auth!(principal = afg_r4_runtime::afg_principal!(u)"),
+        "afg_auth! not inserted with wrapped principal:\n{code}"
+    );
+    // The probe must come BEFORE the `if`, not between condition lines.
+    let auth = code.find("afg_auth!").unwrap();
+    let iff = code.find("if first()").unwrap();
+    assert!(auth < iff, "probe must precede the if statement:\n{code}");
+    assert!(
+        syn::parse_file(&code).is_ok(),
+        "instrumented multi-line-if output must parse as Rust:\n{code}"
     );
 }
 
@@ -224,7 +322,7 @@ fn skips_afg_auth_for_byte_principal() {
         }],
     };
 
-    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
@@ -234,7 +332,7 @@ fn skips_afg_auth_for_byte_principal() {
 }
 
 // Regression: a crate that receives ONLY a tokio::spawn wrap (no plan site) must
-// still get the afg_runtime dependency. Previously the dep was added before the
+// still get the afg_r4_runtime dependency. Previously the dep was added before the
 // spawn-wrap pass, so a spawn-only crate was left without it and failed to compile.
 #[test]
 fn spawn_only_crate_still_gets_runtime_dep() {
@@ -255,25 +353,25 @@ fn spawn_only_crate_still_gets_runtime_dep() {
 
     // Empty plan: the only injection is the spawn wrap.
     let plan = InstrumentationPlan { sites: vec![] };
-    instrument_project(&src, &dst, &plan, &runtime_path(), &[]).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
-        code.contains("afg_runtime::with_current_context"),
+        code.contains("afg_r4_runtime::with_current_context"),
         "spawn was not wrapped:\n{code}"
     );
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
     assert!(
-        manifest.contains("afg_runtime"),
-        "spawn-only crate did not get the afg_runtime dep:\n{manifest}"
+        manifest.contains("afg_r4_runtime"),
+        "spawn-only crate did not get the afg_r4_runtime dep:\n{manifest}"
     );
 }
 
 // Source-DAO end to end through instrument_project: a rule captures the per-instance
-// resource at a `let` binding, and the crate gets the afg_runtime dep.
+// resource at a `let` binding, and the crate gets the afg_r4_runtime dep.
 #[test]
 fn source_dao_rule_injects_and_adds_dep() {
-    use afg_instrument::SourceDaoRule;
+    use afg_r4_instrument::SourceDaoRule;
     let src = fresh("afg_instr_srcdao_src");
     let dst = fresh("afg_instr_srcdao_dst");
     fs::create_dir_all(src.join("src")).unwrap();
@@ -300,11 +398,11 @@ fn source_dao_rule_injects_and_adds_dep() {
         principal_expr: Some("local_user_view.person.id".into()),
     }];
     let plan = InstrumentationPlan { sites: vec![] };
-    instrument_project(&src, &dst, &plan, &runtime_path(), &rules).unwrap();
+    instrument_project(&src, &dst, &plan, &runtime_path(), &rules, &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(code.contains("resource = format!(\"thing:{:?}\", pm.id)"), "resource not captured:\n{code}");
     assert!(code.contains("principal = local_user_view.person.id"), "principal not captured on access:\n{code}");
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("afg_runtime"), "source-DAO crate did not get the dep:\n{manifest}");
+    assert!(manifest.contains("afg_r4_runtime"), "source-DAO crate did not get the dep:\n{manifest}");
 }

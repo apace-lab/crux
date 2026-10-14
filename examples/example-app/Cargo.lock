@@ -3,13 +3,14 @@
 version = 4
 
 [[package]]
-name = "afg_runtime"
+name = "afg_r4_runtime"
 version = "0.1.0"
 dependencies = [
  "madsim",
  "madsim-tokio",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -182,7 +183,7 @@ dependencies = [
 name = "example-app"
 version = "0.1.0"
 dependencies = [
- "afg_runtime",
+ "afg_r4_runtime",
  "madsim",
  "madsim-tokio",
 ]

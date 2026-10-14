@@ -101,7 +101,7 @@ pub fn current_context() -> AfgContext {
 /// spawned future with this to carry the principal across the spawn boundary:
 ///
 /// ```ignore
-/// tokio::spawn(afg_runtime::with_current_context(async move { /* ... */ }));
+/// tokio::spawn(afg_r4_runtime::with_current_context(async move { /* ... */ }));
 /// ```
 ///
 /// The context is captured eagerly (in the calling task, where the principal is
@@ -386,7 +386,7 @@ fn schedule_state() -> &'static Mutex<ScheduleState> {
 }
 
 /// Name of the artificial second user the scheduler synthesizes for single-user
-/// apps. Must match `afg_scheduler::SYNTHETIC_PRINCIPAL`.
+/// apps. Must match `afg_cuie::SYNTHETIC_PRINCIPAL`.
 pub const SYNTHETIC_PRINCIPAL: &str = "afg-synthetic";
 
 /// Whether the loaded replay schedule includes `principal` as a step. An app can
@@ -481,13 +481,62 @@ pub async fn schedule_point(site: PACallSiteID, file: &'static str, line: u32) {
         spins += 1;
         if spins >= max_spins {
             eprintln!(
-                "[afg_runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
+                "[afg_r4_runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
             );
             return;
         }
         // Cooperative gate: MadSim remains the actual executor/scheduler.
         tokio::task::yield_now().await;
     }
+}
+
+/// Compile-time principal stringification for instrumenter-injected auth sites.
+///
+/// The auto-instrumenter takes an auth check's first argument as the principal
+/// (a convention), but that argument's concrete TYPE is not known when the probe
+/// is written: vaultwarden's ownership checks take a `&UserId` newtype (which
+/// derives `Debug` but NOT `Into<String>`, the ~36 E0277 errors), while
+/// `is_valid_request`'s first argument is a resource struct that derives neither.
+/// `set_auth` wants a `String`, so neither type is accepted directly.
+///
+/// This module resolves it with autoref specialization (stable since 1.0, so it
+/// works on the pinned 1.84.1): calling `afg_to_principal` on `&AfgPrincipal(&x)`
+/// picks the `Debug` impl (on `AfgPrincipal<T>`) with no autoref when `T: Debug`,
+/// and otherwise autorefs once to the blanket fallback impl (on
+/// `&AfgPrincipal<T>`). So the injected auth site ALWAYS compiles whatever the
+/// principal expression's type is: a `Debug` principal stringifies through `{:?}`,
+/// and a non-Debug one records a fixed label.
+pub mod principal {
+    pub struct AfgPrincipal<T>(pub T);
+
+    pub trait ViaDebug {
+        fn afg_to_principal(&self) -> String;
+    }
+    impl<T: std::fmt::Debug> ViaDebug for AfgPrincipal<T> {
+        fn afg_to_principal(&self) -> String {
+            format!("{:?}", self.0)
+        }
+    }
+
+    pub trait ViaFallback {
+        fn afg_to_principal(&self) -> String;
+    }
+    impl<T> ViaFallback for &AfgPrincipal<T> {
+        fn afg_to_principal(&self) -> String {
+            String::from("afg-principal")
+        }
+    }
+}
+
+/// Stringify any principal expression to a `String` (see [`principal`]). Used by
+/// the instrumenter so an `afg_auth!` principal of any type compiles.
+#[macro_export]
+macro_rules! afg_principal {
+    ($e:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::principal::{ViaDebug as _, ViaFallback as _};
+        (&$crate::principal::AfgPrincipal(&$e)).afg_to_principal()
+    }};
 }
 
 #[macro_export]
@@ -599,6 +648,46 @@ mod tests {
             })
             .await;
         });
+    }
+
+    // Regression (vaultwarden): the instrumenter takes an auth check's first arg
+    // as the principal. vaultwarden's checks pass a `&UserId` newtype that derives
+    // Debug but NOT Into<String> (the E0277 failure), and some checks pass a struct
+    // that derives neither. `afg_principal!` must stringify a Debug principal via
+    // {:?} and fall back for a non-Debug one, so the injected site always compiles.
+    #[test]
+    fn afg_principal_debug_and_fallback() {
+        #[derive(Debug)]
+        struct UserId(String); // Debug, but no Into<String> (like vaultwarden's)
+        struct Opaque; // derives nothing (like EmergencyAccess at is_valid_request)
+
+        let uid = UserId("abc".into());
+        assert_eq!(crate::afg_principal!(&uid), format!("{:?}", &uid));
+        assert_eq!(crate::afg_principal!(uid), "UserId(\"abc\")");
+
+        let o = Opaque;
+        assert_eq!(crate::afg_principal!(&o), "afg-principal");
+    }
+
+    // The exact instrumenter-generated `afg_auth!` form must COMPILE with a
+    // Debug-only newtype principal (the bug was `principal = user_uuid` where
+    // `&UserId: !Into<String>`). Guarded by `if false` so the test does not write
+    // a trace file; the body is still type-checked.
+    #[test]
+    fn afg_auth_compiles_with_debug_only_newtype() {
+        #[derive(Debug)]
+        struct UserId(String);
+        let uid = UserId("u1".into());
+        let principal = crate::afg_principal!(&uid);
+        assert_eq!(principal, "UserId(\"u1\")");
+        if false {
+            crate::afg_auth!(
+                principal = crate::afg_principal!(&uid),
+                method = "afg-static",
+                permissions = ["*".to_string()],
+                duration_ms = None
+            );
+        }
     }
 
     fn steps() -> Vec<ScheduleStep> {

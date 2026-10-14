@@ -3,11 +3,20 @@
 version = 4
 
 [[package]]
+name = "afg_cuie"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "afg_dashboard"
 version = "0.1.0"
 dependencies = [
+ "afg_cuie",
  "afg_observe",
- "afg_scheduler",
  "anyhow",
  "axum",
  "clap",
@@ -18,15 +27,6 @@ dependencies = [
 
 [[package]]
 name = "afg_observe"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "afg_scheduler"
 version = "0.1.0"
 dependencies = [
  "anyhow",

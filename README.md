@@ -1,11 +1,13 @@
-# AFG — Access Flow Guard
+# AFG - Access Flow Guard
 
 AFG detects and reproduces **cross-user data leaks** in async Rust services: cases
 where one principal's request can read data written by another principal
-through a shared store, cache, database or LLM context. It combines a static taint
-analysis over LLVM IR via [rail-rs](https://github.com/apace-lab/RAIL.git) 
+through a shared store, cache, database or LLM context. It combines a static stage
+over LLVM IR via [rail-rs](https://github.com/apace-lab/RAIL.git) that runs PSA
+(Principal-Sensitive Analysis) and ACE (Access-Control Enforcement)
 with dynamic, deterministic observation on [MadSim](https://github.com/madsim-rs/madsim),
-then generates and replays event schedules to confirm a leak actually occurs.
+then runs R4 (Runtime-preserving Record/Replay/Rescheduling) and CUIE (Cross-User
+Interleaving Exploration) to confirm a leak actually occurs.
 
 See [`experiments/tabby-repro/README.md`](experiments/tabby-repro/README.md)
 for an end-to-end run against a real ~45k-LOC app
@@ -29,23 +31,23 @@ parent/
 
 ```text
 LLVM IR
-  -> rail-rs PAG + taint analysis (auth points, LLM calls, data-store access,
-     static cross-user overlaps)
+  -> rail-rs PAG + PSA/ACE (auth points, LLM calls, data-store access,
+     static cross-user overlaps)                                [PSA + ACE]
   -> InstrumentationPlan
   -> source instrumentation (inserts afg_auth! / afg_monitor! / afg_access!
-     / afg_schedule_point! at the flagged sites)                [afg_instrument]
-  -> MadSim observation, N deterministic seeds                  [afg_runtime]
+     / afg_schedule_point! at the flagged sites)                [R4: afg_r4_instrument]
+  -> MadSim observation, N deterministic seeds                  [R4: afg_r4_runtime]
   -> per-principal scopes + cross-user overlap detection        [afg_observe]
-  -> schedule generation (e.g., writer-before-reader orderings) [afg_scheduler]
+  -> schedule generation (e.g., writer-before-reader orderings) [CUIE: afg_cuie]
   -> optional replay against a schedule -> leak verdict         [afg_dashboard]
 ```
 
 By default `afg` runs the whole pipeline end to end. Two flags are designed to stop the pipeline at certain stage:
 
-- `--static-only` — run just the first stage (PAG + taint analysis) and write
+- `--static-only` - run just the first stage (PAG + PSA/ACE) and write
   `instrumentation.json`, then stop. For apps whose source isn't available
   to instrument (e.g. analyzing a compiled real-world app).
-- `--instrument-only` — run the static stage *and* source instrumentation,
+- `--instrument-only` - run the static stage *and* source instrumentation,
   write the instrumented app, then stop before running via MadSim. For apps you'll run
   yourself outside MadSim (e.g. a live server on real tokio).
 
@@ -58,24 +60,24 @@ additionally executes the generated schedules and reports a leak verdict.
 | Crate | Role |
 |---|---|
 | [`src/`](src) (`afg`) | CLI driving the whole pipeline (see below) |
-| [`afg_instrument/`](afg_instrument) | Turns an `InstrumentationPlan` into source edits (currently line-based, see limitations) |
-| [`afg_observe/`](afg_observe) | Runs the app under MadSim, parses JSONL traces into per-principal scopes and overlaps |
-| [`afg_scheduler/`](afg_scheduler) | Generates writer/reader schedules from overlaps and verifies replays |
-| [`afg_runtime/`](afg_runtime) | Runtime crate the instrumented app depends on: `afg_auth!`, `afg_monitor!`, `afg_access!`, `afg_schedule_point!` ([details](afg_runtime/README.md)) |
+| [`afg_r4_instrument/`](afg_r4_instrument) | R4: turns an `InstrumentationPlan` into source edits (currently line-based, see limitations) |
+| [`afg_observe/`](afg_observe) | Runs the app under MadSim, parses JSONL traces into per-principal scopes and overlaps (the leak oracle) |
+| [`afg_cuie/`](afg_cuie) | CUIE: generates writer/reader schedules from overlaps and verifies replays |
+| [`afg_r4_runtime/`](afg_r4_runtime) | R4: runtime crate the instrumented app depends on: `afg_auth!`, `afg_monitor!`, `afg_access!`, `afg_schedule_point!` ([details](afg_r4_runtime/README.md)) |
 | [`afg_dashboard/`](afg_dashboard) | Standalone web console: tails a trace or a finished run-dir and shows scopes/overlaps/schedules/verdicts |
-| [`examples/example-app/`](examples/example-app) | Minimal two-principal app instrumented by hand against `afg_runtime` ([details](examples/example-app/README.md)) |
+| [`examples/example-app/`](examples/example-app) | Minimal two-principal app instrumented by hand against `afg_r4_runtime` ([details](examples/example-app/README.md)) |
 | [`experiments/tabby-repro/`](experiments/tabby-repro) | Reproduction kit running AFG against a real-world app (TabbyML/tabby) |
 
-`afg_instrument`, `afg_observe`, and `afg_scheduler` are path dependencies of
-the top-level `afg` package; `afg_runtime` and `afg_dashboard` are separate
+`afg_r4_instrument`, `afg_observe`, and `afg_cuie` are path dependencies of
+the top-level `afg` package; `afg_r4_runtime` and `afg_dashboard` are separate
 crates built/run on their own.
 
 ## Config and build
 
-Add the absolute path of your `afg_prototype/afg_runtime` to `my-app/Cargo.toml` as a dependency: 
+Add the absolute path of your `afg_prototype/afg_r4_runtime` to `my-app/Cargo.toml` as a dependency: 
 ```toml 
 [dependencies]
-afg_runtime = { path = "$PATH-TO-YOUR/afg_prototype/afg_runtime" }
+afg_r4_runtime = { path = "$PATH-TO-YOUR/afg_prototype/afg_r4_runtime" }
 ```
 
 then run: 
@@ -109,13 +111,13 @@ cargo run -- \
 
 Useful flags are (`cargo run -- --help` for the full list):
 
-- `--llvm-ir` — repeatable, for a multi-module app (e.g. lib + bin)
-- `--llm-api` / `--ac` / `--data-access` — signature catalogs, default to
+- `--llvm-ir` - repeatable, for a multi-module app (e.g. lib + bin)
+- `--llm-api` / `--ac` / `--data-access` - signature catalogs, default to
   `../rail-rs/signatures/*.json`
-- `--afg-runtime` — path to the `afg_runtime` crate added to the instrumented app
-- `--static-only` — stop after the static stage (no source needed)
-- `--instrument-only` — stop after instrumenting (no MadSim observe/replay)
-- `--cargo-cmd` — cargo subcommand the observe stage runs (`test` or `run`)
+- `--afg-r4-runtime` - path to the `afg_r4_runtime` crate added to the instrumented app
+- `--static-only` - stop after the static stage (no source needed)
+- `--instrument-only` - stop after instrumenting (no MadSim observe/replay)
+- `--cargo-cmd` - cargo subcommand the observe stage runs (`test` or `run`)
 
 ## Expected output structure
 
@@ -152,7 +154,7 @@ cargo run -- --run-dir ../runs/test-001   # or: --trace path/to/trace.jsonl
 [afg-demo](https://github.com/sanjib-sen/afg-demo) is a companion repo: a
 runnable multi-user chat service with real login and LLM integration, run live
 on real `tokio` (not MadSim). Its [`run.sh`](https://github.com/sanjib-sen/afg-demo/blob/main/run.sh) script
-drives the whole thing end to end — see its README for the full walkthrough.
+drives the whole thing end to end - see its README for the full walkthrough.
 
 To be specific, `afg --instrument-only` finds and instruments its
 auth check and LLM call automatically; the app's own shared answer cache is
@@ -163,7 +165,7 @@ console shows the live trace, per-principal scopes, and detected overlaps via ou
 
 ## Important prototype limitation
 
-The source rewriter in `afg_instrument` is line-based; it demonstrates the
+The source rewriter in `afg_r4_instrument` is line-based; it demonstrates the
 orchestration interface but is not syntax-aware. It currently does not insert
 `afg_schedule_point!(...).await` correctly inside multi-line method chains
 (see the known limitation in

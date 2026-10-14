@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "afg_scheduler"
+name = "afg_cuie"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -4,10 +4,10 @@
 //   --trace <file.jsonl>  a live AFG trace to tail (a running service)
 //   --run-dir <dir>       a finished pipeline run (observe/*.jsonl + result/verdict-*.json)
 //
-// It runs the real `afg_observe::analyze_traces` + `afg_scheduler::generate_schedules`
+// It runs the real `afg_observe::analyze_traces` + `afg_cuie::generate_schedules`
 // over the trace(s) and serves a browser console showing events, per-principal
 // scopes, cross-user overlaps, schedules, any replay verdicts, and any optional
-// app-reported leaks (afg_runtime `Leak` events).
+// app-reported leaks (afg_r4_runtime `Leak` events).
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -17,7 +17,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use afg_observe::analyze_traces;
-use afg_scheduler::generate_schedules;
+use afg_cuie::generate_schedules;
 
 #[derive(Parser, Debug)]
 #[command(name = "afg-dashboard")]
@@ -165,7 +165,7 @@ async fn afg_state(State(src): State<Arc<Source>>) -> Json<AfgState> {
     let schedules = generate_schedules(&obs, 20);
     let events = read_events(&src.traces);
 
-    // App-reported leaks (afg_runtime `leak` events) plus AFG-derived
+    // App-reported leaks (afg_r4_runtime `leak` events) plus AFG-derived
     // resource-linked leaks (a cross-user read of a resource instance that
     // returned another principal's rows). Both render in the same leak UI.
     let mut leaks: Vec<LeakItem> = events

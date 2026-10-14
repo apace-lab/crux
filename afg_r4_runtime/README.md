@@ -2,7 +2,7 @@
 
 A source-level runtime observation layer for AFG + MadSim. Instrumented apps
 depend on this crate and call its macros at the auth/monitor/access/schedule
-sites `afg_instrument` inserts; see the [top-level README](../README.md) for
+sites `afg_r4_instrument` inserts; see the [top-level README](../README.md) for
 where this fits in the AFG pipeline, and
 [`examples/example-app`](../examples/example-app) for a minimal, hand-instrumented
 app built against it (with run commands).

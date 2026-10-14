@@ -6,11 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use afg_instrument::{
+use afg_r4_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
 use afg_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
-use afg_scheduler::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
+use afg_cuie::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
 
 #[derive(Parser, Debug)]
 #[command(name = "afg")]
@@ -40,9 +40,16 @@ struct Cli {
     #[arg(long, default_value = "../rail-rs/signatures/source_dao_functions.json")]
     source_dao: PathBuf,
 
-    /// Path to the afg_runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "afg_runtime")]
-    afg_runtime: PathBuf,
+    /// Serve-site capture catalog (JSON): at an auto-selected serve, iterates the
+    /// in-scope served rows and emits a resource-linked access per row capturing the
+    /// principal directly, for handlers that serve many rows (vaultwarden's
+    /// `_get_org_details`). Missing file means no rules.
+    #[arg(long, default_value = "../rail-rs/signatures/serve_capture_functions.json")]
+    serve_capture: PathBuf,
+
+    /// Path to the afg_r4_runtime crate, added as a dependency to the instrumented app
+    #[arg(long, default_value = "afg_r4_runtime")]
+    afg_r4_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]
     run_dir: PathBuf,
@@ -77,6 +84,12 @@ struct Cli {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StaticStageResult {
     instrumentation_plan: InstrumentationPlan,
+    /// DWARF struct-field index (type name -> field names), recovered from the IR debug
+    /// info and threaded into the serve-capture inference so it can pick a served row's id
+    /// field and a principal type's id field by naming convention. Not persisted (it is a
+    /// large derived map rebuilt from the IR each run).
+    #[serde(skip, default)]
+    struct_fields: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Stable (deterministic across runs) numeric id for a function name, used as
@@ -89,7 +102,7 @@ fn hash_fn_id(name: &str) -> u64 {
 }
 
 /// Project-relative source location of a PANode, if it has debug info.
-fn node_loc(engine: &rail_rs::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
+fn node_loc(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
     let node = engine.nodes.get(&node_id)?;
     let loc = node.source_loc.as_ref()?;
     let file = loc.file.clone()?;
@@ -157,7 +170,7 @@ fn data_access_kind(category: &str) -> AccessKind {
 /// even though their per-callsite PANodes differ, which is what lets the
 /// write-then-read leak verdict link across them. Sites with no shared store
 /// pointee (e.g. a lone store) get no id and fall back to per-callsite behaviour.
-fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collections::HashMap<usize, u64> {
+fn compute_data_resource_ids(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>) -> std::collections::HashMap<usize, u64> {
     use std::collections::{BTreeSet, HashMap};
 
     // Per data-access site: the pointees its store arguments alias (tier 1), and
@@ -165,7 +178,7 @@ fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collec
     let mut site_pointees: Vec<(usize, BTreeSet<usize>)> = Vec::new();
     let mut site_handles: Vec<(usize, BTreeSet<usize>)> = Vec::new();
     for point in engine.semantic_points.iter() {
-        if !matches!(point.kind, rail_rs::taint_analysis::SemanticPointKind::DataAccess { .. }) {
+        if !matches!(point.kind, rail_rs::psa::SemanticPointKind::DataAccess { .. }) {
             continue;
         }
         let mut pts: BTreeSet<usize> = BTreeSet::new();
@@ -333,10 +346,13 @@ fn run_pag_and_afg(
         debug_types.composite_count(),
         debug_types.value_link_count()
     );
+    // Struct-field index for serve-capture inference (type name -> field names), built from
+    // the debug info before it is moved into the analysis.
+    let struct_fields = debug_types.struct_field_index();
     analysis.set_debug_types(debug_types);
 
     // Build the PAG (afg mode) and run the taint analysis.
-    let engine = analysis.taint_analysis("afg", None);
+    let engine = analysis.psa("afg", None);
     println!(
         "      taint analysis: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
         engine.app_crate,
@@ -345,15 +361,15 @@ fn run_pag_and_afg(
         engine.node_contexts.len()
     );
 
-    use rail_rs::taint_analysis::SemanticPointKind;
+    use rail_rs::psa::SemanticPointKind;
 
     // --- Access-control dominance analysis (automated enforcement pass) ---
     // Enumerate data-access sites not dominated, on all paths, by an access-control check
     // bound to the accessed resource (the leak candidates). Block-level dominance comes
     // from the per-function dominator trees; resource binding from the points-to sets.
-    // See rail_rs::dominance.
+    // See rail_rs::ace (the access-control enforcement pass).
     {
-        use rail_rs::dominance::{self, AccessSite, CallSite, CheckSite, DominanceFacts, PrecomputedOracle};
+        use rail_rs::ace::{self as dominance, AccessSite, CallSite, CheckSite, DominanceFacts, PrecomputedOracle};
         use rail_rs::CFGNode;
         use std::collections::{BTreeMap, BTreeSet};
 
@@ -488,7 +504,7 @@ fn run_pag_and_afg(
             }
             cur.to_string()
         };
-        let kind_key = |p: &rail_rs::taint_analysis::SemanticPoint| -> Option<&'static str> {
+        let kind_key = |p: &rail_rs::psa::SemanticPoint| -> Option<&'static str> {
             match &p.kind {
                 SemanticPointKind::AccessControl { .. }
                 | SemanticPointKind::AccessControlRecovery { .. } => Some("ac"),
@@ -504,7 +520,7 @@ fn run_pag_and_afg(
                 }
             }
         }
-        let is_redundant_body = |p: &rail_rs::taint_analysis::SemanticPoint| -> bool {
+        let is_redundant_body = |p: &rail_rs::psa::SemanticPoint| -> bool {
             match kind_key(p) {
                 Some(kk) => {
                     is_coroutine_body(&p.security_point.callee)
@@ -884,6 +900,7 @@ fn run_pag_and_afg(
     );
     Ok(StaticStageResult {
         instrumentation_plan: InstrumentationPlan { sites },
+        struct_fields,
     })
 }
 
@@ -917,17 +934,24 @@ fn main() -> Result<()> {
     let instrumented_project = cli.run_dir.join("instrumented/app");
     // SOURCE-level DAO capture rules (catalog-driven): recover per-instance
     // resources for ORM calls the IR erases via `#[async_trait]`. Absent file -> none.
-    let source_dao = afg_instrument::load_source_dao_rules(&cli.source_dao)
+    let source_dao = afg_r4_instrument::load_source_dao_rules(&cli.source_dao)
         .with_context(|| format!("loading source-DAO catalog {}", cli.source_dao.display()))?;
     if !source_dao.is_empty() {
         println!("      source-DAO rules: {}", source_dao.len());
+    }
+    let serve_capture = afg_r4_instrument::load_serve_capture_rules(&cli.serve_capture)
+        .with_context(|| format!("loading serve-capture catalog {}", cli.serve_capture.display()))?;
+    if !serve_capture.is_empty() {
+        println!("      serve-capture rules: {}", serve_capture.len());
     }
     instrument_project(
         &cli.project,
         &instrumented_project,
         &static_result.instrumentation_plan,
-        &cli.afg_runtime,
+        &cli.afg_r4_runtime,
         &source_dao,
+        &serve_capture,
+        &static_result.struct_fields,
     )?;
 
     if cli.instrument_only {
@@ -1036,7 +1060,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{data_access_kind, establishes_principal};
-    use afg_instrument::AccessKind;
+    use afg_r4_instrument::AccessKind;
 
     #[test]
     fn data_access_direction_from_category() {

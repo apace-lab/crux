@@ -141,6 +141,80 @@ pub struct SourceDaoRule {
 /// [ {rule}, ... ], ... }` (the `_schema_notes` key is skipped), mirroring the other
 /// catalogs. Returns an empty vec if the file is absent.
 pub fn load_source_dao_rules(path: &Path) -> Result<Vec<SourceDaoRule>> {
+    load_rule_catalog(path)
+}
+
+/// A declarative SERVE-SITE capture rule, loaded from a JSON catalog. Where a
+/// `SourceDaoRule` captures ONE instance from a single DAO `let` binding, a serve
+/// rule captures a COLLECTION of served rows: it anchors right after a `let
+/// <binding> = <..call..>;` and injects a loop over an in-scope collection
+/// (`items_expr`), emitting one resource-linked `afg_access!` per served item with
+/// the principal captured DIRECTLY at the site. This models a real handler that
+/// serves many rows at once (vaultwarden's `_get_org_details` serving every org
+/// cipher), so the oracle can link each served instance across principals and flag
+/// the one a non-authorized reader was served.
+///
+/// Everything app-specific is DATA here (the item/principal/resource expressions),
+/// NOT code; the STATIC stage already auto-selected the serve site. The
+/// `authorized_expr` declares, per served item, the principals authorized for it
+/// from the resource's OWN DATA MODEL (collection membership), not from the
+/// handler's (vulnerable) serve decision; the LEAK VERDICT is still rendered by the
+/// oracle (afg_observe) by comparing readers against the union of those grants, not
+/// by this probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServeCaptureRule {
+    /// Qualified `Type::method` of the `let`-binding call to anchor the capture
+    /// after (e.g. "CipherSyncData::new"). Placing the loop right after this `let`
+    /// keeps the served collection, the principal, and the binding all in scope.
+    pub call: String,
+    /// Expression (in scope at the anchor) for the collection of served rows to
+    /// iterate (e.g. "ciphers"). Iterated by `.iter()`, so the handler's own later
+    /// consumption of the collection is unaffected.
+    pub items_expr: String,
+    /// "Read" (a serve; the leak-exposing direction) or "Write".
+    pub kind: String,
+    /// Resource label prefix, so the same instance links by `<prefix>:<id>`.
+    /// OPTIONAL: when absent, INFERRED as the lowercased element-type name of the
+    /// served collection (the `Type` of the `let <items_expr> = Type::method(..)`
+    /// binding that produced it). Declared only to override the inferred label.
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// Per-item resource instance id, with `{item}` substituted by the loop
+    /// variable (e.g. "{item}.uuid"). OPTIONAL: when absent, INFERRED from the
+    /// served element type's recovered DWARF struct layout by picking its id field
+    /// by naming convention (`uuid` / `id` / `<type>_id`); a newtype element uses the
+    /// item itself. Declared only to override the inferred id.
+    #[serde(default)]
+    pub item_id_expr: Option<String>,
+    /// Handler parameter carrying the principal (e.g. "user_id"); the capture is
+    /// emitted only in functions that expose it, so a non-handler match still
+    /// compiles. None = never capture a principal (and never an authorized grant).
+    #[serde(default)]
+    pub principal_param: Option<String>,
+    /// Principal expression, evaluated in the handler (e.g. "user_id"). OPTIONAL:
+    /// when absent (but `principal_param` is set), INFERRED by a principal-TYPE
+    /// classifier over the handler's parameter types -- the parameter whose recovered
+    /// type is an identity/auth type (`UserId`, `*Headers` guard, `Claims`, ...) with
+    /// its id field appended (a newtype identity uses the parameter itself). Declared
+    /// only to override the inferred expression.
+    #[serde(default)]
+    pub principal_expr: Option<String>,
+    /// Optional `Vec<String>` expression declaring, per served item, the principals
+    /// authorized for it from the DATA MODEL (collection membership), with `{item}`,
+    /// `{binding}`, and `{principal}` substituted. None = single-owner resource.
+    #[serde(default)]
+    pub authorized_expr: Option<String>,
+}
+
+/// Load SERVE-SITE capture rules from a JSON catalog (same shape and `_schema_notes`
+/// handling as the other catalogs). Returns an empty vec if the file is absent.
+pub fn load_serve_capture_rules(path: &Path) -> Result<Vec<ServeCaptureRule>> {
+    load_rule_catalog(path)
+}
+
+/// Shared loader for the `{ "_schema_notes": {...}, "<group>": [ {rule}, ... ] }`
+/// catalog shape used by the source-DAO and serve-capture catalogs.
+fn load_rule_catalog<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -154,7 +228,7 @@ pub fn load_source_dao_rules(path: &Path) -> Result<Vec<SourceDaoRule>> {
         }
         if let Some(arr) = entries.as_array() {
             for e in arr {
-                rules.push(serde_json::from_value::<SourceDaoRule>(e.clone())?);
+                rules.push(serde_json::from_value::<T>(e.clone())?);
             }
         }
     }
@@ -167,6 +241,8 @@ pub fn instrument_project(
     plan: &InstrumentationPlan,
     runtime_crate_path: &Path,
     source_dao: &[SourceDaoRule],
+    serve_capture: &[ServeCaptureRule],
+    struct_fields: &HashMap<String, Vec<String>>,
 ) -> Result<()> {
     if dst.exists() {
         fs::remove_dir_all(dst)?;
@@ -178,7 +254,7 @@ pub fn instrument_project(
         by_file.entry(site.file.clone()).or_default().push(site);
     }
 
-    // Crates we actually rewrite; the afg_runtime dep is added to each of these (a
+    // Crates we actually rewrite; the afg_r4_runtime dep is added to each of these (a
     // real app can be a cargo workspace, so the dep must go in each member crate,
     // not the workspace root).
     let mut runtime_manifests: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -239,7 +315,7 @@ pub fn instrument_project(
                             let tmpl = resource_expr.clone().unwrap_or_else(|| "{}".to_string());
                             let id_access = tmpl.replace("{}", "__afg_v");
                             let macros = format!(
-                                "afg_runtime::afg_monitor!(function = {fn_id}); afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id}, resource = format!(\"{prefix}:{{:?}}\", {id_access}));"
+                                "afg_r4_runtime::afg_monitor!(function = {fn_id}); afg_r4_runtime::afg_access!(node = {panode}, kind = afg_r4_runtime::AccessKind::{kind}, function = {fn_id}, resource = format!(\"{prefix}:{{:?}}\", {id_access}));"
                             );
                             expr_wraps.push((site.line, name.clone(), macros));
                             continue;
@@ -267,13 +343,13 @@ pub fn instrument_project(
                     };
                     let access_call = match (runtime_resource, resource) {
                         (Some(expr), _) => format!(
-                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id}, resource = {expr});"
+                            "afg_r4_runtime::afg_access!(node = {panode}, kind = afg_r4_runtime::AccessKind::{kind}, function = {fn_id}, resource = {expr});"
                         ),
                         (None, Some(r)) => format!(
-                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id}, resource = \"res:{r}\");"
+                            "afg_r4_runtime::afg_access!(node = {panode}, kind = afg_r4_runtime::AccessKind::{kind}, function = {fn_id}, resource = \"res:{r}\");"
                         ),
                         (None, None) => format!(
-                            "afg_runtime::afg_access!(node = {panode}, kind = afg_runtime::AccessKind::{kind}, function = {fn_id});"
+                            "afg_r4_runtime::afg_access!(node = {panode}, kind = afg_r4_runtime::AccessKind::{kind}, function = {fn_id});"
                         ),
                     };
                     // Insert before the enclosing STATEMENT, not the call line.
@@ -294,7 +370,7 @@ pub fn instrument_project(
                                     // a block that fires the probe and returns the value. Done
                                     // after the per-site loop (inline, preserving line numbers).
                                     let macros_inline = format!(
-                                        "afg_runtime::afg_monitor!(function = {fn_id}); {access_call}"
+                                        "afg_r4_runtime::afg_monitor!(function = {fn_id}); {access_call}"
                                     );
                                     expr_wraps.push((site.line, name.to_string(), macros_inline));
                                     continue;
@@ -315,12 +391,12 @@ pub fn instrument_project(
                         .unwrap_or_else(|| enclosing_is_async(&lines, idx));
                     let gate = match (schedule_site, call_name) {
                         (Some(sched), Some(_)) if is_async => {
-                            format!("afg_runtime::afg_schedule_point!(site = {sched}).await;\n")
+                            format!("afg_r4_runtime::afg_schedule_point!(site = {sched}).await;\n")
                         }
                         _ => String::new(),
                     };
                     let injected = format!(
-                        "{gate}afg_runtime::afg_monitor!(function = {fn_id});\n{access_call}"
+                        "{gate}afg_r4_runtime::afg_monitor!(function = {fn_id});\n{access_call}"
                     );
                     inserts.push((idx, injected));
                 }
@@ -336,8 +412,11 @@ pub fn instrument_project(
                     if principal_from_return.unwrap_or(false) {
                         let tmpl = principal_expr.clone().unwrap_or_else(|| "{}".to_string());
                         let principal_access = tmpl.replace("{}", "__afg_v");
+                        // `afg_principal!` stringifies ANY principal type (Debug via
+                        // {:?}, else a fallback label), so this compiles whatever the
+                        // captured return value's type is.
                         let auth_macro = format!(
-                            "afg_runtime::afg_auth!(principal = format!(\"{{:?}}\", {principal_access}), method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
+                            "afg_r4_runtime::afg_auth!(principal = afg_r4_runtime::afg_principal!({principal_access}), method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
                         );
                         expr_wraps.push((site.line, call_name.clone(), auth_macro));
                         continue;
@@ -347,12 +426,40 @@ pub fn instrument_project(
                     // principal (credential checks like argon2/bcrypt get no Auth
                     // site), so this is a backstop: only inject when the first
                     // argument is a string-like identity, and skip anything else.
-                    match extract_first_arg(&lines[site.line - 1], call_name) {
+                    // The auth call may be a few lines below the plan line; find it so
+                    // the principal is read from, and the probe placed relative to, the
+                    // real call line.
+                    let call_idx =
+                        find_call_line(&lines, site.line - 1, call_name).unwrap_or(site.line - 1);
+                    match extract_first_arg(&lines[call_idx], call_name) {
                         Some(principal) if looks_like_string_principal(&principal) => {
+                            // BUG A: stringify the principal with `afg_principal!` so
+                            // ANY type works. vaultwarden's checks pass a `&UserId`
+                            // newtype (Debug, but no `Into<String>` -> the ~36 E0277
+                            // errors); `is_valid_request` passes a non-Debug struct.
+                            // `afg_principal!` resolves both at compile time.
                             let injected = format!(
-                                "afg_runtime::afg_auth!(principal = {principal}, method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
+                                "afg_r4_runtime::afg_auth!(principal = afg_r4_runtime::afg_principal!({principal}), method = \"afg-static\", permissions = [\"*\".to_string()], duration_ms = None);"
                             );
-                            inserts.push((site.line - 1, injected));
+                            // BUG B: place the probe at the enclosing STATEMENT
+                            // boundary, not blindly before the call line. An auth check
+                            // can sit in a match guard (`pat if check(..) => ..`) or in a
+                            // block-less / multi-line `if` condition, where a raw
+                            // statement insert produces unparseable code ("expected `{`"
+                            // / "expected `=>`"). `statement_start` walks up to the first
+                            // line of the enclosing statement (so a multi-line `if`
+                            // condition gets the probe before the whole `if`), and
+                            // returns None for a true expression position (a match guard),
+                            // which we SKIP and log rather than emit code that cannot
+                            // compile.
+                            match statement_start(&lines, call_idx) {
+                                Some(idx) => inserts.push((idx, injected)),
+                                None => eprintln!(
+                                    "[instrument] note: skipping afg_auth! at {}:{} ({call_name}): no statement boundary (expression position, e.g. a match guard)",
+                                    path.display(),
+                                    site.line
+                                ),
+                            }
                         }
                         other => {
                             eprintln!(
@@ -401,10 +508,11 @@ pub fn instrument_project(
     // SOURCE-level DAO resource capture (for async_trait-erased ORM calls the IR
     // cannot see) and tokio::spawn principal propagation. Both walk the whole copied
     // tree; EVERY crate that receives an injection is recorded so it gets the
-    // afg_runtime dependency below. (This also fixes the earlier bug where a crate
+    // afg_r4_runtime dependency below. (This also fixes the earlier bug where a crate
     // that only got a spawn-wrap, or only a source-DAO capture, was left without the
     // dep because the dep was added before these passes ran.)
     let mut source_dao_total = 0usize;
+    let mut serve_capture_total = 0usize;
     let mut wrapped_total = 0usize;
     for entry in WalkDir::new(dst).into_iter().flatten() {
         if !(entry.file_type().is_file()
@@ -425,6 +533,14 @@ pub fn instrument_project(
                 touched = true;
             }
         }
+        if !serve_capture.is_empty() {
+            let (rewritten, n) = inject_serve_captures(&text, serve_capture, struct_fields);
+            if n > 0 {
+                text = rewritten;
+                serve_capture_total += n;
+                touched = true;
+            }
+        }
         let (rewritten, n) = wrap_spawns(&text);
         if n > 0 {
             text = rewritten;
@@ -441,11 +557,14 @@ pub fn instrument_project(
     if source_dao_total > 0 {
         println!("[instrument] source-DAO: captured {source_dao_total} per-instance resource access(es)");
     }
+    if serve_capture_total > 0 {
+        println!("[instrument] serve-capture: injected {serve_capture_total} per-serve resource loop(s)");
+    }
     if wrapped_total > 0 {
         println!("[instrument] wrapped {wrapped_total} tokio::spawn site(s) with with_current_context");
     }
 
-    // Make the afg_runtime macros available in EVERY crate we injected into (plan
+    // Make the afg_r4_runtime macros available in EVERY crate we injected into (plan
     // sites + source-DAO + spawn-wraps, all collected in runtime_manifests above).
     // Fall back to the project root for a single-crate app with no recorded member.
     if runtime_manifests.is_empty() {
@@ -460,7 +579,7 @@ pub fn instrument_project(
 }
 
 /// Wrap the future argument of `tokio::spawn(...)` and `tokio::task::spawn(...)`
-/// with `afg_runtime::with_current_context(...)`, so the spawned task carries the
+/// with `afg_r4_runtime::with_current_context(...)`, so the spawned task carries the
 /// current principal (task-locals are not inherited across a spawn). Returns the
 /// rewritten source and the number of wraps applied.
 ///
@@ -496,10 +615,10 @@ fn wrap_spawns(text: &str) -> (String, usize) {
                         let inner = &text[open + 1..close];
                         let already = inner
                             .trim_start()
-                            .starts_with("afg_runtime::with_current_context");
+                            .starts_with("afg_r4_runtime::with_current_context");
                         if !already && !inner.trim().is_empty() {
                             out.push_str(pat); // "...spawn("
-                            out.push_str("afg_runtime::with_current_context(");
+                            out.push_str("afg_r4_runtime::with_current_context(");
                             out.push_str(inner);
                             out.push(')'); // close with_current_context
                             out.push(')'); // close spawn
@@ -834,13 +953,13 @@ fn extract_first_arg(line: &str, call_name: &str) -> Option<String> {
     }
 }
 
-/// Append an `afg_runtime` path dependency to the instrumented app's Cargo.toml
+/// Append an `afg_r4_runtime` path dependency to the instrumented app's Cargo.toml
 /// (idempotent), so the injected macros resolve.
 fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Result<()> {
     let mut text = fs::read_to_string(manifest).with_context(|| {
         format!("instrumented app has no Cargo.toml at {}", manifest.display())
     })?;
-    if text.contains("afg_runtime") {
+    if text.contains("afg_r4_runtime") {
         return Ok(());
     }
     let abs = fs::canonicalize(runtime_crate_path)
@@ -849,7 +968,7 @@ fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Resu
         text.push('\n');
     }
     text.push_str(&format!(
-        "\n[dependencies.afg_runtime]\npath = {:?}\n",
+        "\n[dependencies.afg_r4_runtime]\npath = {:?}\n",
         abs.display().to_string()
     ));
     fs::write(&manifest, text)?;
@@ -914,7 +1033,444 @@ fn inject_source_dao_accesses(text: &str, rules: &[SourceDaoRule]) -> (String, u
                 None => format!("{binding}{}", rule.id_expr),
             };
             let stmt = format!(
-                "afg_runtime::afg_monitor!(function = {fid}); afg_runtime::afg_access!(node = {node}, kind = afg_runtime::AccessKind::{kind}, function = {fid}, resource = format!(\"{prefix}:{{:?}}\", {resource_val}), count = {count}{authz_clause}{principal_clause});"
+                "afg_r4_runtime::afg_monitor!(function = {fid}); afg_r4_runtime::afg_access!(node = {node}, kind = afg_r4_runtime::AccessKind::{kind}, function = {fid}, resource = format!(\"{prefix}:{{:?}}\", {resource_val}), count = {count}{authz_clause}{principal_clause});"
+            );
+            inserts.push((end_line, stmt));
+        }
+    }
+    if inserts.is_empty() {
+        return (text.to_string(), 0);
+    }
+    let n = inserts.len();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    inserts.sort_by(|a, b| b.0.cmp(&a.0));
+    for (idx, stmt) in inserts {
+        let i = idx.min(lines.len());
+        lines.insert(i, stmt);
+    }
+    (lines.join("\n") + "\n", n)
+}
+
+// ---------------------------------------------------------------------------
+// SERVE-SITE capture with FIELD INFERENCE.
+//
+// Three of a serve rule's four capture fields (count, resource, principal) are now
+// INFERRED rather than hand-declared; only the anchor (`call` + `items_expr` + `kind`),
+// the `principal_param` gating, and the data-model `authorized_expr` grant remain as
+// per-app config. The inference:
+//
+//   * count    -- STRUCTURAL and app-agnostic: the injection loops ONCE PER served row
+//                 over the collection, so each event is exactly 1 served row. No input.
+//   * resource -- element type of the served collection recovered from SOURCE (the
+//                 `let <items_expr> = Type::method(..)` binding gives `Type`); its id
+//                 field picked by naming convention (`uuid`/`id`/`<type>_id`) from the
+//                 element type's DWARF struct layout (`struct_fields`, threaded from the
+//                 static stage). `prefix` = lowercased element-type name. Heuristic but
+//                 general: works for any `let items = Type::query(..)` serve whose row
+//                 type the debug info recovers.
+//   * principal -- a principal-TYPE classifier (`is_principal_type`, mirroring the
+//                 static `is_infra_type`) over the handler's parameter types picks the
+//                 identity parameter (gated to the one the rule names) and appends its id
+//                 field (a newtype identity uses the parameter itself). Heuristic on type
+//                 names; the static stage independently seeds/tracks this principal via
+//                 points-to, so the classifier agrees with the dominance signal.
+//
+// Each inferred field falls back to a declared value when the rule still carries one, and
+// a field that cannot be inferred (unknown element type or id field) is reported and the
+// injection is skipped rather than emitting a wrong expression.
+// ---------------------------------------------------------------------------
+
+/// Last path segment of a type, through references/parens/groups (`&UserId` -> `UserId`).
+fn type_last_segment(t: &syn::Type) -> Option<String> {
+    match t {
+        syn::Type::Reference(r) => type_last_segment(&r.elem),
+        syn::Type::Paren(p) => type_last_segment(&p.elem),
+        syn::Type::Group(g) => type_last_segment(&g.elem),
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
+}
+
+/// The `Type` of a `Type::method(..)` call reachable through `?`/`.await`/`&`/parens/
+/// method-receiver chains (so `Cipher::find_by_org(..).await` yields `Cipher`).
+fn call_type_prefix(e: &syn::Expr) -> Option<String> {
+    match e {
+        syn::Expr::Call(c) => {
+            if let syn::Expr::Path(p) = &*c.func {
+                let segs: Vec<String> =
+                    p.path.segments.iter().map(|s| s.ident.to_string()).collect();
+                if segs.len() >= 2 {
+                    return Some(segs[segs.len() - 2].clone());
+                }
+            }
+            call_type_prefix(&c.func)
+        }
+        syn::Expr::MethodCall(m) => call_type_prefix(&m.receiver),
+        syn::Expr::Try(t) => call_type_prefix(&t.expr),
+        syn::Expr::Await(a) => call_type_prefix(&a.base),
+        syn::Expr::Paren(p) => call_type_prefix(&p.expr),
+        syn::Expr::Reference(r) => call_type_prefix(&r.expr),
+        _ => None,
+    }
+}
+
+/// True if a type NAME denotes a request principal / identity carrier. This mirrors the
+/// static stage's `is_infra_type` classifier (same last-segment substring style), but
+/// selects the per-user identity types rather than shared infrastructure.
+fn is_principal_type(name: &str) -> bool {
+    const PATS: &[&str] = &[
+        "UserId", "UserUuid", "UserAuth", "Identity", "Claims", "Principal", "Headers",
+        "Session", "Jwt", "Login", "Membership",
+    ];
+    PATS.iter().any(|p| name.contains(p))
+}
+
+/// How a type's row-id resolves from its recovered struct fields.
+enum IdResolve {
+    /// A named id field: reference it as `<value>.<field>`.
+    Field(String),
+    /// A newtype / tuple struct: the value itself is the id.
+    Newtype,
+    /// No struct layout, or no id-looking field: cannot infer.
+    Unresolved,
+}
+
+/// Pick a type's row-id field from its recovered DWARF fields by naming convention.
+fn resolve_id_field(fields: &HashMap<String, Vec<String>>, type_name: &str) -> IdResolve {
+    let Some(flist) = fields.get(type_name) else {
+        return IdResolve::Unresolved;
+    };
+    let is_positional = |f: &str| f.is_empty() || f == "0" || f == "__0" || f.chars().all(|c| c.is_ascii_digit());
+    if flist.len() == 1 && is_positional(&flist[0]) {
+        return IdResolve::Newtype;
+    }
+    let lower = type_name.to_ascii_lowercase();
+    let candidates = [
+        "uuid".to_string(),
+        "id".to_string(),
+        format!("{lower}_id"),
+        format!("{lower}id"),
+    ];
+    for c in &candidates {
+        if let Some(f) = flist.iter().find(|f| f.eq_ignore_ascii_case(c)) {
+            return IdResolve::Field(f.clone());
+        }
+    }
+    // A single descriptively-named field is itself the id (a named newtype).
+    if flist.len() == 1 && !is_positional(&flist[0]) {
+        return IdResolve::Field(flist[0].clone());
+    }
+    IdResolve::Unresolved
+}
+
+/// Pick an identity type's principal-id field. Like `resolve_id_field` but with the
+/// identity-type conventions (`user_id`/`user_uuid`) tried first, so a request guard like
+/// `UserAuth { user_id, .. }` yields `user_id`. A newtype identity (`UserId(String)`), or
+/// one with no recognizable field, resolves to the parameter itself (`Newtype`).
+fn resolve_principal_field(fields: &HashMap<String, Vec<String>>, type_name: &str) -> IdResolve {
+    let Some(flist) = fields.get(type_name) else {
+        return IdResolve::Unresolved;
+    };
+    let is_positional = |f: &str| f.is_empty() || f == "0" || f == "__0" || f.chars().all(|c| c.is_ascii_digit());
+    if flist.len() == 1 && is_positional(&flist[0]) {
+        return IdResolve::Newtype;
+    }
+    for c in ["user_id", "user_uuid", "uuid", "id"] {
+        if let Some(f) = flist.iter().find(|f| f.eq_ignore_ascii_case(c)) {
+            return IdResolve::Field(f.clone());
+        }
+    }
+    if flist.len() == 1 && !is_positional(&flist[0]) {
+        return IdResolve::Field(flist[0].clone());
+    }
+    IdResolve::Unresolved
+}
+
+/// Per-anchor inference context: the enclosing handler's parameter types and the element
+/// type of every local bound from a `Type::method(..)` call (so the served collection's
+/// row type can be recovered from source).
+struct ServeAnchorCtx {
+    params: Vec<(String, String)>,
+    locals: HashMap<String, String>,
+}
+
+/// Find `let <binding> = <expr containing Type::method(..)>;` anchors for a serve rule,
+/// returning per anchor the binding name, 1-based end line, whether the enclosing fn
+/// exposes `principal_param`, and the inference context of that fn.
+fn find_serve_anchors(
+    text: &str,
+    qualified: &str,
+    principal_param: Option<&str>,
+) -> Vec<(String, usize, bool, ServeAnchorCtx)> {
+    use syn::visit::Visit;
+    let Some((ty, method)) = qualified.split_once("::") else {
+        return vec![];
+    };
+    let Ok(file) = syn::parse_file(text) else {
+        return vec![];
+    };
+    struct FV<'a> {
+        ty: &'a str,
+        method: &'a str,
+        principal_param: Option<&'a str>,
+        out: Vec<(String, usize, bool, ServeAnchorCtx)>,
+    }
+    impl FV<'_> {
+        fn handle_fn(&mut self, sig: &syn::Signature, block: &syn::Block) {
+            let params: Vec<(String, String)> = sig
+                .inputs
+                .iter()
+                .filter_map(|arg| {
+                    if let syn::FnArg::Typed(pt) = arg {
+                        if let Some(id) = pat_ident(&pt.pat) {
+                            return Some((id, type_last_segment(&pt.ty).unwrap_or_default()));
+                        }
+                    }
+                    None
+                })
+                .collect();
+            let has_principal = self
+                .principal_param
+                .is_some_and(|p| params.iter().any(|(id, _)| id == p));
+            let mut locals: HashMap<String, String> = HashMap::new();
+            let mut anchors: Vec<(String, usize)> = Vec::new();
+            collect_fn_locals(block, self.ty, self.method, &mut locals, &mut anchors);
+            for (binding, end_line) in anchors {
+                self.out.push((
+                    binding,
+                    end_line,
+                    has_principal,
+                    ServeAnchorCtx { params: params.clone(), locals: locals.clone() },
+                ));
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for FV<'_> {
+        fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+            self.handle_fn(&f.sig, &f.block);
+            syn::visit::visit_item_fn(self, f);
+        }
+        fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+            self.handle_fn(&f.sig, &f.block);
+            syn::visit::visit_impl_item_fn(self, f);
+        }
+    }
+    let mut v = FV { ty, method, principal_param, out: Vec::new() };
+    v.visit_file(&file);
+    v.out
+}
+
+/// Extract the bound identifier of a `let` pattern, allowing a type-ascribed `let x: T`.
+fn pat_ident(p: &syn::Pat) -> Option<String> {
+    match p {
+        syn::Pat::Ident(pi) => Some(pi.ident.to_string()),
+        syn::Pat::Type(pt) => pat_ident(&pt.pat),
+        _ => None,
+    }
+}
+
+/// Walk a function body collecting `let` bindings: `locals` maps each binding to the
+/// `Type` of a `Type::method(..)` initializer (its element/row type), and `anchors`
+/// collects bindings whose initializer contains `ty::method` (the serve anchor). Does
+/// not descend into nested item functions.
+fn collect_fn_locals(
+    block: &syn::Block,
+    ty: &str,
+    method: &str,
+    locals: &mut HashMap<String, String>,
+    anchors: &mut Vec<(String, usize)>,
+) {
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+    struct LV<'a> {
+        ty: &'a str,
+        method: &'a str,
+        locals: &'a mut HashMap<String, String>,
+        anchors: &'a mut Vec<(String, usize)>,
+    }
+    impl<'ast> Visit<'ast> for LV<'_> {
+        fn visit_local(&mut self, l: &'ast syn::Local) {
+            if let (Some(name), Some(init)) = (pat_ident(&l.pat), &l.init) {
+                if let Some(t) = call_type_prefix(&init.expr) {
+                    locals_entry(self.locals, &name, t);
+                }
+                if expr_contains_call(&init.expr, self.ty, self.method) {
+                    self.anchors.push((name, l.span().end().line));
+                }
+            }
+            syn::visit::visit_local(self, l);
+        }
+        // Do not attribute a nested item fn's locals to the enclosing fn.
+        fn visit_item_fn(&mut self, _f: &'ast syn::ItemFn) {}
+    }
+    let mut v = LV { ty, method, locals, anchors };
+    v.visit_block(block);
+}
+
+fn locals_entry(locals: &mut HashMap<String, String>, name: &str, ty: String) {
+    locals.entry(name.to_string()).or_insert(ty);
+}
+
+/// True if `e` contains a call to `ty::method` through `?`/`.await`/`&`/parens/args/
+/// method-receiver. Shared by the serve-capture and source-DAO anchor finders.
+fn expr_contains_call(e: &syn::Expr, ty: &str, method: &str) -> bool {
+    let hit = |p: &syn::Path| {
+        let segs: Vec<String> = p.segments.iter().map(|x| x.ident.to_string()).collect();
+        segs.len() >= 2 && segs[segs.len() - 1] == method && segs[segs.len() - 2] == ty
+    };
+    match e {
+        syn::Expr::Call(c) => {
+            if let syn::Expr::Path(p) = &*c.func {
+                if hit(&p.path) {
+                    return true;
+                }
+            }
+            c.args.iter().any(|a| expr_contains_call(a, ty, method))
+        }
+        syn::Expr::MethodCall(m) => {
+            expr_contains_call(&m.receiver, ty, method)
+                || m.args.iter().any(|a| expr_contains_call(a, ty, method))
+        }
+        syn::Expr::Try(t) => expr_contains_call(&t.expr, ty, method),
+        syn::Expr::Await(a) => expr_contains_call(&a.base, ty, method),
+        syn::Expr::Paren(p) => expr_contains_call(&p.expr, ty, method),
+        syn::Expr::Reference(r) => expr_contains_call(&r.expr, ty, method),
+        _ => false,
+    }
+}
+
+/// Inject a per-serve resource-capture loop after each `let <binding> = <..anchor
+/// call..>;` whose call matches a `ServeCaptureRule`. Unlike the source-DAO pass
+/// (one instance per binding) this iterates the in-scope served collection and
+/// emits one resource-linked `afg_access!` per served row, with count, resource, and
+/// principal INFERRED (see the module note above). `struct_fields` is the DWARF struct
+/// field index threaded from the static stage. Returns (rewritten_text, loops-injected).
+fn inject_serve_captures(
+    text: &str,
+    rules: &[ServeCaptureRule],
+    struct_fields: &HashMap<String, Vec<String>>,
+) -> (String, usize) {
+    let item = "__afg_item";
+    let mut inserts: Vec<(usize, String)> = Vec::new();
+    for rule in rules {
+        let principal_param = rule.principal_param.as_deref();
+        for (binding, end_line, has_principal, ctx) in
+            find_serve_anchors(text, &rule.call, principal_param)
+        {
+            // Serve-capture is a CROSS-PRINCIPAL signal: without the principal captured
+            // at the site each event is an `unknown` principal, and an `unknown` read
+            // of an instance a real principal also read is a spurious cross-user leak.
+            // So a rule that names a `principal_param` injects ONLY into functions that
+            // expose it (the anchor call can appear in sibling handlers -- vaultwarden's
+            // sync handler also builds a `CipherSyncData` over its own `ciphers` -- which
+            // must NOT be captured, or the control false-positives). A rule with no
+            // `principal_param` is a bare resource-linking capture and injects anywhere.
+            if rule.principal_param.is_some() && !has_principal {
+                continue;
+            }
+
+            // --- RESOURCE inference: the served collection's element type + its id field.
+            let elem_type = ctx.locals.get(&rule.items_expr).cloned();
+            let prefix = match (&rule.prefix, &elem_type) {
+                (Some(p), _) => p.clone(),
+                (None, Some(t)) => t.to_ascii_lowercase(),
+                (None, None) => {
+                    eprintln!(
+                        "[instrument] serve-capture: cannot infer resource prefix for `{}` (element type of `{}` unknown in `{}`); skipping -- declare `prefix`/`item_id_expr` to override",
+                        rule.items_expr, rule.items_expr, rule.call
+                    );
+                    continue;
+                }
+            };
+            let id_expr = match &rule.item_id_expr {
+                Some(e) => e.replace("{item}", item),
+                None => {
+                    let Some(ety) = elem_type.as_deref() else {
+                        eprintln!(
+                            "[instrument] serve-capture: cannot infer resource id for `{}` (element type unknown); skipping",
+                            rule.items_expr
+                        );
+                        continue;
+                    };
+                    match resolve_id_field(struct_fields, ety) {
+                        IdResolve::Field(f) => format!("{item}.{f}"),
+                        IdResolve::Newtype => item.to_string(),
+                        IdResolve::Unresolved => {
+                            eprintln!(
+                                "[instrument] serve-capture: cannot infer id field of served type `{ety}` (no recovered struct layout with a uuid/id field); skipping -- declare `item_id_expr` to override"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
+            let resource_val = format!("format!(\"{prefix}:{{:?}}\", {id_expr})");
+
+            // --- PRINCIPAL inference: the handler param whose type is an identity type.
+            let principal_expr: Option<String> = match (&rule.principal_expr, has_principal) {
+                (Some(p), true) => Some(p.clone()),
+                (None, true) => {
+                    let pname = rule.principal_param.as_deref().unwrap_or_default();
+                    let ptype = ctx
+                        .params
+                        .iter()
+                        .find(|(id, _)| id == pname)
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or_default();
+                    if ptype.is_empty() || is_principal_type(&ptype) {
+                        match resolve_principal_field(struct_fields, &ptype) {
+                            IdResolve::Field(f) => Some(format!("{pname}.{f}")),
+                            // A newtype identity (`UserId(String)`) or an unresolved one is
+                            // used directly: the parameter IS the principal id.
+                            IdResolve::Newtype | IdResolve::Unresolved => Some(pname.to_string()),
+                        }
+                    } else {
+                        eprintln!(
+                            "[instrument] serve-capture: principal param `{pname}` type `{ptype}` not recognized as an identity type; capturing the parameter directly"
+                        );
+                        Some(pname.to_string())
+                    }
+                }
+                _ => None,
+            };
+            let principal_clause = match &principal_expr {
+                Some(p) => format!(", principal = {p}"),
+                None => String::new(),
+            };
+
+            let fid = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (&rule.call, &binding, end_line, "serve").hash(&mut h);
+                h.finish()
+            };
+            // Distinct mask from the source-DAO node (0x9600) so the two passes never
+            // collide on a node id for the same binding.
+            let node = fid ^ 0x5e4e;
+            let kind = if rule.kind.eq_ignore_ascii_case("write") {
+                "Write"
+            } else {
+                "Read"
+            };
+            // Authorized grant from the DATA MODEL (collection membership), declared
+            // per served item. Only when the fn exposes the principal (so the grant
+            // can name it). The oracle renders the verdict, not this probe.
+            let authz_clause = match (&rule.authorized_expr, has_principal) {
+                (Some(a), true) if !a.is_empty() => {
+                    let a = a
+                        .replace("{item}", item)
+                        .replace("{binding}", &binding)
+                        .replace("{principal}", principal_expr.as_deref().unwrap_or("()"));
+                    format!(", authorized = ({a})")
+                }
+                _ => String::new(),
+            };
+            let items = &rule.items_expr;
+            // COUNT inference: the loop emits one access PER served row, so each is
+            // exactly 1 row. Structural, app-agnostic, no per-app input.
+            let count = 1u64;
+            let stmt = format!(
+                "for {item} in ({items}).iter() {{ afg_r4_runtime::afg_monitor!(function = {fid}); afg_r4_runtime::afg_access!(node = {node}, kind = afg_r4_runtime::AccessKind::{kind}, function = {fid}, resource = {resource_val}, count = {count}{authz_clause}{principal_clause}); }}"
             );
             inserts.push((end_line, stmt));
         }
@@ -959,31 +1515,6 @@ fn find_dao_let_bindings(
     let Ok(file) = syn::parse_file(text) else {
         return vec![];
     };
-    fn contains_call(e: &syn::Expr, ty: &str, method: &str) -> bool {
-        let hit = |p: &syn::Path| {
-            let segs: Vec<String> = p.segments.iter().map(|x| x.ident.to_string()).collect();
-            segs.len() >= 2 && segs[segs.len() - 1] == method && segs[segs.len() - 2] == ty
-        };
-        match e {
-            syn::Expr::Call(c) => {
-                if let syn::Expr::Path(p) = &*c.func {
-                    if hit(&p.path) {
-                        return true;
-                    }
-                }
-                c.args.iter().any(|a| contains_call(a, ty, method))
-            }
-            syn::Expr::MethodCall(m) => {
-                contains_call(&m.receiver, ty, method)
-                    || m.args.iter().any(|a| contains_call(a, ty, method))
-            }
-            syn::Expr::Try(t) => contains_call(&t.expr, ty, method),
-            syn::Expr::Await(a) => contains_call(&a.base, ty, method),
-            syn::Expr::Paren(p) => contains_call(&p.expr, ty, method),
-            syn::Expr::Reference(r) => contains_call(&r.expr, ty, method),
-            _ => false,
-        }
-    }
     struct V<'a> {
         ty: &'a str,
         method: &'a str,
@@ -1006,7 +1537,7 @@ fn find_dao_let_bindings(
         }
         fn visit_local(&mut self, l: &'ast syn::Local) {
             if let Some(init) = &l.init {
-                if contains_call(&init.expr, self.ty, self.method) {
+                if expr_contains_call(&init.expr, self.ty, self.method) {
                     if let syn::Pat::Ident(pi) = &l.pat {
                         self.out
                             .push((pi.ident.to_string(), l.span().end().line, self.cur_principal));
@@ -1083,13 +1614,13 @@ mod spawn_wrap_tests {
     fn wraps_simple_and_qualified() {
         let (out, n) = wrap_spawns("let h = tokio::spawn(fut);");
         assert_eq!(n, 1);
-        assert_eq!(out, "let h = tokio::spawn(afg_runtime::with_current_context(fut));");
+        assert_eq!(out, "let h = tokio::spawn(afg_r4_runtime::with_current_context(fut));");
 
         let (out, n) = wrap_spawns("tokio::task::spawn(async move { work().await; });");
         assert_eq!(n, 1);
         assert_eq!(
             out,
-            "tokio::task::spawn(afg_runtime::with_current_context(async move { work().await; }));"
+            "tokio::task::spawn(afg_r4_runtime::with_current_context(async move { work().await; }));"
         );
     }
 
@@ -1097,7 +1628,7 @@ mod spawn_wrap_tests {
     fn one_wrap_for_whole_argument_with_inner_parens_and_commas() {
         let (out, n) = wrap_spawns("tokio::spawn(handle(a, b))");
         assert_eq!(n, 1);
-        assert_eq!(out, "tokio::spawn(afg_runtime::with_current_context(handle(a, b)))");
+        assert_eq!(out, "tokio::spawn(afg_r4_runtime::with_current_context(handle(a, b)))");
     }
 
     #[test]
@@ -1105,7 +1636,7 @@ mod spawn_wrap_tests {
         let src = r#"tokio::spawn(async { let s = ")x("; let c = ')'; go().await })"#;
         let (out, n) = wrap_spawns(src);
         assert_eq!(n, 1);
-        assert!(out.starts_with("tokio::spawn(afg_runtime::with_current_context(async {"));
+        assert!(out.starts_with("tokio::spawn(afg_r4_runtime::with_current_context(async {"));
         assert!(out.ends_with("go().await }))"));
     }
 
@@ -1129,7 +1660,7 @@ mod spawn_wrap_tests {
 
     #[test]
     fn already_wrapped_is_left_alone() {
-        let src = "tokio::spawn(afg_runtime::with_current_context(fut))";
+        let src = "tokio::spawn(afg_r4_runtime::with_current_context(fut))";
         let (out, n) = wrap_spawns(src);
         assert_eq!(n, 0);
         assert_eq!(out, src);
@@ -1409,19 +1940,26 @@ pub fn wrap_expr_access(text: &str, line: usize, call_name: &str, macros: &str) 
         return None;
     }
     let orig = &text[bstart..bend];
-    // Parenthesize the block. A bare `{ .. }` is valid in most expression positions
-    // (match arm, tuple, argument), but NOT as a let-else scrutinee: `let Ok(x) = {
-    // .. } else {}` is rejected by the parser. `({ .. })` is valid everywhere a
-    // block expression is, so wrapping in parens fixes let-else uniformly without
-    // special-casing the context.
-    let replacement = format!("({{ let __afg_v = {orig}; {macros} __afg_v }})");
-    let mut out = String::with_capacity(text.len() + replacement.len());
-    out.push_str(&text[..bstart]);
-    out.push_str(&replacement);
-    out.push_str(&text[bend..]);
-    // Only accept the rewrite if the result still parses as Rust.
-    syn::parse_file(&out).ok()?;
-    Some(out)
+    // Prefer a BARE block `{ let __afg_v = <orig>; <macros> __afg_v }`. It is valid
+    // in most expression positions (match arm, tuple, call argument) AND, unlike the
+    // parenthesized `({ .. })` form, does not trip the `unused_parens` lint, which a
+    // crate built with `-D unused` (vaultwarden) promotes to a hard error. A bare
+    // block is rejected only in a few positions (notably a let-else scrutinee:
+    // `let Ok(x) = { .. } else {}`), so fall back to the parenthesized form there.
+    // Each candidate is accepted only if the resulting file still parses as Rust, so
+    // the bare block is used wherever it is legal and the parens appear only when
+    // genuinely required.
+    let block = format!("{{ let __afg_v = {orig}; {macros} __afg_v }}");
+    for replacement in [block.clone(), format!("({block})")] {
+        let mut out = String::with_capacity(text.len() + replacement.len());
+        out.push_str(&text[..bstart]);
+        out.push_str(&replacement);
+        out.push_str(&text[bend..]);
+        if syn::parse_file(&out).is_ok() {
+            return Some(out);
+        }
+    }
+    None
 }
 
 /// Source text of the `operand`-th argument (receiver-inclusive, matching the
@@ -1712,7 +2250,7 @@ mod source_dao_tests {
         let (out, n) = inject_source_dao_accesses(src, &[rule("PrivateMessage::read", "Read", 1, None)]);
         assert_eq!(n, 1, "should capture one read: {out}");
         assert!(out.contains("resource = format!(\"pm:{:?}\", pm.id)"), "got: {out}");
-        assert!(out.contains("kind = afg_runtime::AccessKind::Read"), "got: {out}");
+        assert!(out.contains("kind = afg_r4_runtime::AccessKind::Read"), "got: {out}");
         assert!(out.contains("count = 1"), "got: {out}");
         // The principal is passed DIRECTLY on the access (not via a separate afg_auth).
         assert!(out.contains("principal = local_user_view.person.id"), "principal missing: {out}");
@@ -1753,5 +2291,193 @@ mod source_dao_tests {
         assert!(out.contains("resource = format!(\"pm:{:?}\", pm.id)"));
         assert!(!out.contains("principal ="), "no principal param -> no principal clause: {out}");
         assert!(syn::parse_file(&out).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod serve_capture_tests {
+    use super::{
+        inject_serve_captures, is_principal_type, resolve_id_field, resolve_principal_field,
+        IdResolve, ServeCaptureRule,
+    };
+    use std::collections::HashMap;
+
+    // The TRIMMED vaultwarden rule, as it now lives in serve_capture_functions.json after
+    // dropping count / resource (prefix+item_id_expr) / principal_expr: only the anchor
+    // (call + items_expr + kind), the principal_param gating, and the data-model
+    // authorized grant remain. count/resource/principal must come from inference.
+    fn vw_rule() -> ServeCaptureRule {
+        ServeCaptureRule {
+            call: "CipherSyncData::new".into(),
+            items_expr: "ciphers".into(),
+            kind: "Read".into(),
+            prefix: None,
+            item_id_expr: None,
+            principal_param: Some("user_id".into()),
+            principal_expr: None,
+            authorized_expr: Some(
+                "if {binding}.cipher_collections.get(&{item}.uuid).is_some() { vec![format!(\"{:?}\", {principal})] } else { Vec::new() }"
+                    .into(),
+            ),
+        }
+    }
+
+    // DWARF struct field index threaded from the static stage: the served row type `Cipher`
+    // has a `uuid` id field; the identity type `UserId` is a newtype (single positional
+    // field), so the principal resolves to the parameter itself.
+    fn vw_fields() -> HashMap<String, Vec<String>> {
+        let mut m = HashMap::new();
+        m.insert(
+            "Cipher".to_string(),
+            vec!["uuid".into(), "name".into(), "data".into()],
+        );
+        m.insert("UserId".to_string(), vec!["0".into()]);
+        m
+    }
+
+    const VW_SRC: &str = "\
+async fn _get_org_details(org_id: &OrganizationId, host: &str, user_id: &UserId, conn: &mut DbConn) -> Value {
+    let ciphers = Cipher::find_by_org(org_id, conn).await;
+    let cipher_sync_data = CipherSyncData::new(user_id, CipherSyncType::Organization, conn).await;
+    let mut ciphers_json = Vec::with_capacity(ciphers.len());
+    for c in ciphers {
+        ciphers_json.push(c.to_json(host, user_id, Some(&cipher_sync_data), CipherSyncType::Organization, conn).await);
+    }
+    json!(ciphers_json)
+}
+";
+
+    // Full vaultwarden serve capture with count/resource/principal ALL INFERRED: the
+    // prefix (`cipher`) and id field (`uuid`) come from the served element type `Cipher`
+    // and its recovered fields; the principal (`user_id`) from the identity-typed param;
+    // the count (1) from the per-row loop. The injected loop borrows (`.iter()`), so the
+    // handler's own `for c in ciphers` (by value, below) still compiles.
+    #[test]
+    fn vaultwarden_serve_capture_loop_inferred() {
+        let (out, n) = inject_serve_captures(VW_SRC, &[vw_rule()], &vw_fields());
+        assert_eq!(n, 1, "should inject exactly one serve loop: {out}");
+        assert!(out.contains("for __afg_item in (ciphers).iter()"), "loop missing: {out}");
+        assert!(
+            out.contains("resource = format!(\"cipher:{:?}\", __afg_item.uuid)"),
+            "INFERRED per-item resource missing (prefix=cipher, id=uuid): {out}"
+        );
+        assert!(out.contains("count = 1"), "INFERRED count missing: {out}");
+        assert!(out.contains("principal = user_id"), "INFERRED principal missing: {out}");
+        assert!(
+            out.contains("authorized = (if cipher_sync_data.cipher_collections.get(&__afg_item.uuid).is_some()"),
+            "data-model authorized grant missing/unsubstituted: {out}"
+        );
+        assert!(out.contains("vec![format!(\"{:?}\", user_id)]"), "grant principal unsubstituted: {out}");
+        // The handler's own by-value consumption of `ciphers` is still present after.
+        assert!(out.contains("for c in ciphers {"), "handler loop clobbered: {out}");
+        assert!(syn::parse_file(&out).is_ok(), "result must parse: {out}");
+    }
+
+    // Sanity check: the inferred principal/resource agree with the known-correct
+    // vaultwarden values (principal = user_id, resource id field = uuid).
+    #[test]
+    fn inference_agrees_with_known_vaultwarden_values() {
+        assert!(is_principal_type("UserId"), "UserId must classify as identity");
+        assert!(is_principal_type("OrgMemberHeaders"), "a *Headers guard must classify");
+        assert!(!is_principal_type("DbConn"), "a connection must NOT classify");
+        assert!(!is_principal_type("OrganizationId"), "an org id must NOT classify as principal");
+        match resolve_id_field(&vw_fields(), "Cipher") {
+            IdResolve::Field(f) => assert_eq!(f, "uuid", "Cipher id field must be uuid"),
+            _ => panic!("Cipher id field must resolve"),
+        }
+        assert!(matches!(resolve_principal_field(&vw_fields(), "UserId"), IdResolve::Newtype));
+    }
+
+    // Declared prefix/item_id_expr still OVERRIDE inference (back-compat / escape hatch).
+    #[test]
+    fn declared_fields_override_inference() {
+        let mut r = vw_rule();
+        r.prefix = Some("cust".into());
+        r.item_id_expr = Some("{item}.custom_id".into());
+        r.principal_expr = Some("user_id.inner".into());
+        let (out, n) = inject_serve_captures(VW_SRC, &[r], &vw_fields());
+        assert_eq!(n, 1);
+        assert!(out.contains("resource = format!(\"cust:{:?}\", __afg_item.custom_id)"), "got: {out}");
+        assert!(out.contains("principal = user_id.inner"), "declared principal must win: {out}");
+    }
+
+    // An identity type with a named sub-id field yields `<param>.user_id` (not the param).
+    #[test]
+    fn principal_type_with_sub_id_field() {
+        let src = "\
+async fn h(headers: OrgMemberHeaders, conn: &mut DbConn) -> Value {
+    let ciphers = Cipher::find_by_org(org_id, conn).await;
+    let cipher_sync_data = CipherSyncData::new(conn).await;
+    json!([])
+}
+";
+        let mut r = vw_rule();
+        r.principal_param = Some("headers".into());
+        r.authorized_expr = None;
+        let mut fields = vw_fields();
+        fields.insert("OrgMemberHeaders".into(), vec!["user_id".into(), "org_id".into()]);
+        let (out, n) = inject_serve_captures(src, &[r], &fields);
+        assert_eq!(n, 1, "got: {out}");
+        assert!(out.contains("principal = headers.user_id"), "sub-id principal: {out}");
+    }
+
+    // Resource id field that cannot be inferred (no recovered struct layout) is NOT
+    // forced to a wrong expression: the injection is skipped (and reported).
+    #[test]
+    fn unresolved_id_field_skips_injection() {
+        let empty: HashMap<String, Vec<String>> = HashMap::new();
+        let (out, n) = inject_serve_captures(VW_SRC, &[vw_rule()], &empty);
+        assert_eq!(n, 0, "no recovered fields -> no forced resource -> skip: {out}");
+        assert_eq!(out, VW_SRC);
+    }
+
+    // A rule that names a principal_param must NOT inject into a sibling handler that
+    // lacks it (vaultwarden's sync handler also builds a CipherSyncData over its own
+    // `ciphers`): an unknown-principal serve event would false-positive the control.
+    #[test]
+    fn rule_with_principal_param_skips_non_handler() {
+        let src = "\
+async fn sync(conn: &mut DbConn) -> Value {
+    let ciphers = Cipher::find_by_org(org_id, conn).await;
+    let cipher_sync_data = CipherSyncData::new(conn).await;
+    json!([])
+}
+";
+        let (out, n) = inject_serve_captures(src, &[vw_rule()], &vw_fields());
+        assert_eq!(n, 0, "principal_param rule must skip a fn without that param: {out}");
+        assert_eq!(out, src);
+    }
+
+    // A rule with NO principal_param is a bare resource-linking capture: it injects
+    // anywhere the anchor matches, with (inferred) resource and count but no principal.
+    #[test]
+    fn principal_less_rule_injects_bare_capture() {
+        let mut r = vw_rule();
+        r.principal_param = None;
+        r.principal_expr = None;
+        r.authorized_expr = None;
+        let src = "\
+async fn dump(org_id: &OrganizationId, conn: &mut DbConn) -> Value {
+    let ciphers = Cipher::find_by_org(org_id, conn).await;
+    let cipher_sync_data = CipherSyncData::new(conn).await;
+    json!([])
+}
+";
+        let (out, n) = inject_serve_captures(src, &[r], &vw_fields());
+        assert_eq!(n, 1);
+        assert!(out.contains("resource = format!(\"cipher:{:?}\", __afg_item.uuid)"), "got: {out}");
+        assert!(out.contains("count = 1"));
+        assert!(!out.contains("principal ="), "no principal param -> no principal clause: {out}");
+        assert!(!out.contains("authorized ="), "no principal param -> no authorized clause: {out}");
+        assert!(syn::parse_file(&out).is_ok(), "result must parse: {out}");
+    }
+
+    // No matching anchor call -> no injection, source unchanged.
+    #[test]
+    fn no_anchor_no_injection() {
+        let src = "async fn h() { let x = other(); }\n";
+        let (out, n) = inject_serve_captures(src, &[vw_rule()], &vw_fields());
+        assert_eq!(n, 0);
+        assert_eq!(out, src);
     }
 }

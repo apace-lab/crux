@@ -41,5 +41,37 @@ fn main() -> anyhow::Result<()> {
         println!("  none: every cross-principal read of a shared instance returned no rows (dominated by an ownership check)");
     }
 
+    // Access-then-access: the full three-pattern view (write-then-read =
+    // confidentiality, write-then-write + read-then-write = integrity).
+    let integrity: Vec<_> = result
+        .access_findings
+        .iter()
+        .filter(|f| f.pattern != afg_observe::AccessPattern::WriteThenRead)
+        .collect();
+    println!(
+        "\naccess-then-access findings: {} total ({} confidentiality / write-then-read, {} integrity)",
+        result.access_findings.len(),
+        result.resource_leaks.len(),
+        integrity.len()
+    );
+    for f in &result.access_findings {
+        println!(
+            "  {} [{}]: {} -> {} on {} (node {}){}",
+            f.pattern.label(),
+            match f.class {
+                afg_observe::FindingClass::Confidentiality => "confidentiality",
+                afg_observe::FindingClass::Integrity => "integrity",
+            },
+            f.actor,
+            f.victim,
+            f.resource,
+            f.panode,
+            if f.rows > 0 { format!(", served {} row(s)", f.rows) } else { String::new() },
+        );
+    }
+    if integrity.is_empty() {
+        println!("  no integrity (write-then-write / read-then-write) hazards in this trace");
+    }
+
     Ok(())
 }

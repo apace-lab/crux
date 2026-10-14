@@ -1,8 +1,8 @@
-// Analyze a MadSim trace with the dynamic stages (afg_observe + afg_scheduler)
+// Analyze a MadSim trace with the dynamic stages (afg_observe + afg_cuie)
 // to confirm cross-user overlap detection.
 //   cargo run --example analyze_trace -- <trace.jsonl>
 use afg_observe::analyze_traces;
-use afg_scheduler::generate_schedules;
+use afg_cuie::generate_schedules;
 use std::path::PathBuf;
 
 fn main() {

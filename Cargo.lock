@@ -6,9 +6,9 @@ version = 4
 name = "afg"
 version = "0.1.0"
 dependencies = [
- "afg_instrument",
+ "afg_cuie",
  "afg_observe",
- "afg_scheduler",
+ "afg_r4_instrument",
  "anyhow",
  "clap",
  "rail-rs",
@@ -17,13 +17,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "afg_instrument"
+name = "afg_cuie"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "walkdir",
 ]
 
 [[package]]
@@ -36,12 +35,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "afg_scheduler"
+name = "afg_r4_instrument"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "proc-macro2",
  "serde",
  "serde_json",
+ "syn 2.0.119",
+ "walkdir",
 ]
 
 [[package]]

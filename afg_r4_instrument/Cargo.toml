@@ -1,5 +1,5 @@
 [package]
-name = "afg_instrument"
+name = "afg_r4_instrument"
 version = "0.1.0"
 edition = "2021"
 

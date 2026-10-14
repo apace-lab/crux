@@ -12,17 +12,53 @@ pub struct ScheduleStep {
     pub site: u64,
 }
 
+/// The ordered access-then-access pattern a schedule forces between its two steps.
+/// Only the three orderings that involve a WRITE are hazards (a read-then-read
+/// discloses nothing and mutates nothing). step 0 is the first (victim) access, step 1
+/// is the second (actor) access:
+/// - `WriteThenRead`: step 0 writes, step 1 reads -> CONFIDENTIALITY (actor is served
+///   another principal's data). This was historically the only pattern.
+/// - `WriteThenWrite`: step 0 writes, step 1 writes -> INTEGRITY (actor overwrites a
+///   resource another principal wrote).
+/// - `ReadThenWrite`: step 0 reads, step 1 writes -> INTEGRITY / TOCTOU (actor mutates
+///   a resource another principal had just read).
+/// The authoritative classification of a replay is `afg_observe`'s access-then-access
+/// verdict; this enum records which ordering the schedule was generated to force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulePattern {
+    #[default]
+    WriteThenRead,
+    WriteThenWrite,
+    ReadThenWrite,
+}
+
+impl SchedulePattern {
+    /// (kind of step 0, kind of step 1) that a replay must exhibit, in order.
+    fn kinds(&self) -> (&'static str, &'static str) {
+        match self {
+            SchedulePattern::WriteThenRead => ("write", "read"),
+            SchedulePattern::WriteThenWrite => ("write", "write"),
+            SchedulePattern::ReadThenWrite => ("read", "write"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulePlan {
     pub reason: String,
     pub panode: u64,
     /// Shared-store resource this schedule targets (e.g. "res:123"). When set, the
-    /// leak spans a write and a read on the SAME store through possibly different
+    /// hazard spans the two accesses on the SAME store through possibly different
     /// PANodes (a real store's write and read are different methods), so the
     /// verdict is checked per resource rather than per PANode. None keeps the
     /// single-PANode behaviour (e.g. a hand-marked cache node).
     #[serde(default)]
     pub resource: Option<String>,
+    /// Which access-then-access ordering this schedule forces. Defaults to
+    /// write-then-read for older schedules read back without the field.
+    #[serde(default)]
+    pub pattern: SchedulePattern,
     pub steps: Vec<ScheduleStep>,
 }
 
@@ -67,12 +103,15 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
 
     let mut out = Vec::new();
 
-    // Resource-linked pass. A real store's write and read are DIFFERENT methods
-    // (e.g. `execute` vs `fetch_one`), so a write-then-read leak spans two PANodes
-    // joined only by the shared store. The single-PANode overlap pass below cannot
-    // see that. Here we group data-access accesses by their resource id and, when
-    // one principal writes a resource and a DIFFERENT principal reads it, schedule
-    // the writer before the reader. The verdict is then checked per resource.
+    // Resource-linked pass. A real store's accesses are DIFFERENT methods (e.g.
+    // `execute` vs `fetch_one`), so a cross-user access-then-access hazard spans two
+    // PANodes joined only by the shared store. The single-PANode overlap pass below
+    // cannot see that. Here we group accesses by their resource id and generate a
+    // schedule for each of the three write-involving orderings between two DIFFERENT
+    // principals (see `SchedulePattern`): write-then-read (an unauthorized reader is
+    // served another's data), write-then-write (an unauthorized writer overwrites it),
+    // and read-then-write (an unauthorized writer mutates what another had read). The
+    // replay is then classified per resource by `afg_observe`.
     {
         use std::collections::BTreeMap;
         // site (gate) and node of a principal's access of `kind` on `resource`.
@@ -93,12 +132,15 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
             None
         };
 
+        // (writers, readers) per resource, plus the owner (first writer seen) and the
+        // authorized sets. read_authz = writers + grants (an authorized reader is a
+        // legitimate second party, so no W->R schedule explores it). write_authz =
+        // owner + grants ONLY (a later non-owner writer is an unauthorized mutation,
+        // which is exactly what the two integrity orderings explore; mirrors afg_observe).
         let mut by_resource: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
-        // Authorized-principal set per resource (mirrors afg_observe): every writer, plus
-        // any extra parties a write declares via `authorized`. An authorized reader is a
-        // legitimate second party (a PM's recipient, a document's collaborators), not a leak,
-        // so no schedule is generated to explore it.
-        let mut authorized_by_resource: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut owner_by_resource: BTreeMap<String, String> = BTreeMap::new();
+        let mut read_authz: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut grants_by_resource: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for a in &accesses {
             let Some(res) = a.get("resource").and_then(|x| x.as_str()) else { continue };
             let Some(p) = a.get("principal").and_then(|x| x.as_str()) else { continue };
@@ -110,58 +152,105 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
             let entry = by_resource.entry(res.to_string()).or_default();
             if is_write {
                 entry.0.insert(p.to_string());
+                owner_by_resource.entry(res.to_string()).or_insert_with(|| p.to_string());
+                read_authz.entry(res.to_string()).or_default().insert(p.to_string());
             } else {
                 entry.1.insert(p.to_string());
-            }
-            let az = authorized_by_resource.entry(res.to_string()).or_default();
-            if is_write {
-                az.insert(p.to_string());
             }
             if let Some(list) = a.get("authorized").and_then(|x| x.as_array()) {
                 for n in list {
                     if let Some(s) = n.as_str() {
-                        az.insert(s.to_string());
+                        read_authz.entry(res.to_string()).or_default().insert(s.to_string());
+                        grants_by_resource.entry(res.to_string()).or_default().insert(s.to_string());
                     }
                 }
             }
         }
 
         for (resource, (writers, readers)) in &by_resource {
-            let mut made = false;
-            let authz = authorized_by_resource.get(resource);
-            for w in writers {
+            let r_authz = read_authz.get(resource);
+            let owner = owner_by_resource.get(resource);
+            let grants = grants_by_resource.get(resource);
+            // write_authz = owner + grants.
+            let write_authorized = |p: &str| -> bool {
+                owner.map_or(false, |o| o == p) || grants.map_or(false, |g| g.contains(p))
+            };
+
+            let push = |pattern: SchedulePattern,
+                            reason: String,
+                            first: &str,
+                            first_kind: &str,
+                            second: &str,
+                            second_kind: &str,
+                            out: &mut Vec<SchedulePlan>|
+             -> bool {
+                let (Some((fs_, fnode)), Some((ss, _))) = (
+                    site_and_node(first, resource, first_kind),
+                    site_and_node(second, resource, second_kind),
+                ) else {
+                    return false;
+                };
+                out.push(SchedulePlan {
+                    reason,
+                    panode: fnode,
+                    resource: Some(resource.clone()),
+                    pattern,
+                    steps: vec![
+                        ScheduleStep { principal: first.to_string(), site: fs_ },
+                        ScheduleStep { principal: second.to_string(), site: ss },
+                    ],
+                });
+                true
+            };
+
+            // write-then-read: owner (or any writer) writes, an unauthorized reader reads.
+            'wtr: for w in writers {
                 for r in readers {
-                    if w == r {
+                    if w == r || r_authz.map_or(false, |s| s.contains(r)) {
                         continue;
                     }
-                    if authz.map_or(false, |s| s.contains(r)) {
-                        continue;
+                    if push(
+                        SchedulePattern::WriteThenRead,
+                        format!("cross-user disclosure on resource {resource} ({w} writes before {r} reads, linked across PANodes)"),
+                        w, "write", r, "read", &mut out,
+                    ) {
+                        if out.len() >= max_schedules { return out; }
+                        break 'wtr;
                     }
-                    let (Some((ws, wnode)), Some((rs, _))) = (
-                        site_and_node(w, resource, "write"),
-                        site_and_node(r, resource, "read"),
-                    ) else {
-                        continue;
-                    };
-                    out.push(SchedulePlan {
-                        reason: format!(
-                            "cross-user leak on resource {resource} ({w} writes before {r} reads, linked across PANodes)"
-                        ),
-                        panode: wnode,
-                        resource: Some(resource.clone()),
-                        steps: vec![
-                            ScheduleStep { principal: w.clone(), site: ws },
-                            ScheduleStep { principal: r.clone(), site: rs },
-                        ],
-                    });
-                    if out.len() >= max_schedules {
-                        return out;
-                    }
-                    made = true;
-                    break;
                 }
-                if made {
-                    break;
+            }
+
+            // write-then-write: owner wrote, an unauthorized writer overwrites it.
+            if let Some(o) = owner {
+                'wtw: for w2 in writers {
+                    if w2 == o || write_authorized(w2) {
+                        continue;
+                    }
+                    if push(
+                        SchedulePattern::WriteThenWrite,
+                        format!("cross-user integrity (overwrite) on resource {resource} ({o} wrote, {w2} overwrites)"),
+                        o, "write", w2, "write", &mut out,
+                    ) {
+                        if out.len() >= max_schedules { return out; }
+                        break 'wtw;
+                    }
+                }
+            }
+
+            // read-then-write: a principal read, an unauthorized writer then mutates it.
+            'rtw: for r in readers {
+                for w2 in writers {
+                    if w2 == r || write_authorized(w2) {
+                        continue;
+                    }
+                    if push(
+                        SchedulePattern::ReadThenWrite,
+                        format!("cross-user integrity (TOCTOU) on resource {resource} ({r} read, {w2} mutates)"),
+                        r, "read", w2, "write", &mut out,
+                    ) {
+                        if out.len() >= max_schedules { return out; }
+                        break 'rtw;
+                    }
                 }
             }
         }
@@ -201,6 +290,9 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
                     reason,
                     panode: node,
                     resource: None,
+                    // The single-PANode pass is the coarse legacy signal; it confirms a
+                    // write-then-read on the node (the reader after the writer).
+                    pattern: SchedulePattern::WriteThenRead,
                     steps: vec![
                         ScheduleStep {
                             principal: first.to_string(),
@@ -244,6 +336,7 @@ pub fn generate_schedules<T: Serialize>(observation: &T, max_schedules: usize) -
                     ),
                     panode: node,
                     resource: None,
+                    pattern: SchedulePattern::WriteThenRead,
                     steps: vec![
                         ScheduleStep {
                             principal: real.clone(),
@@ -312,8 +405,13 @@ pub fn verify_replay<T: Serialize>(plan: &SchedulePlan, replay: &T) -> LeakVerdi
             reason: "schedule has fewer than two steps".into(),
         };
     }
-    let writer = plan.steps[0].principal.clone();
-    let reader = plan.steps[1].principal.clone();
+    // step 0 is the first (victim) access, step 1 the second (actor) access; the plan's
+    // pattern says which access KIND each must be. For write-then-read this is the
+    // historical "writer wrote, reader then read"; for the two integrity orderings it
+    // is "writer wrote / reader read, then the actor wrote after".
+    let first = plan.steps[0].principal.clone();
+    let second = plan.steps[1].principal.clone();
+    let (first_kind, second_kind) = plan.pattern.kinds();
     let node = plan.panode;
     let resource = plan.resource.clone();
 
@@ -337,7 +435,7 @@ pub fn verify_replay<T: Serialize>(plan: &SchedulePlan, replay: &T) -> LeakVerdi
         })
         .collect();
 
-    // Target match: on a resource (write and read may be on different PANodes) if
+    // Target match: on a resource (the two accesses may be on different PANodes) if
     // the plan names one, else on the single PANode.
     let on_target = |n: u64, res: Option<&str>| -> bool {
         match &resource {
@@ -350,32 +448,32 @@ pub fn verify_replay<T: Serialize>(plan: &SchedulePlan, replay: &T) -> LeakVerdi
         None => format!("PANode {node}"),
     };
 
-    let write_at = ordered
+    let first_at = ordered
         .iter()
         .filter(|(_, p, n, k, res)| {
-            *p == writer && on_target(*n, *res) && k.eq_ignore_ascii_case("write")
+            *p == first && on_target(*n, *res) && k.eq_ignore_ascii_case(first_kind)
         })
         .map(|(o, ..)| *o)
         .min();
-    let Some(w) = write_at else {
+    let Some(w) = first_at else {
         return LeakVerdict::NotReproduced {
-            reason: format!("writer {writer} did not write {target}"),
+            reason: format!("{first} did not {first_kind} {target}"),
         };
     };
 
-    let read_after = ordered
+    let second_after = ordered
         .iter()
         .filter(|(o, p, n, k, res)| {
-            *p == reader && on_target(*n, *res) && k.eq_ignore_ascii_case("read") && *o > w
+            *p == second && on_target(*n, *res) && k.eq_ignore_ascii_case(second_kind) && *o > w
         })
         .map(|(o, ..)| *o)
         .min();
 
-    if read_after.is_some() {
-        LeakVerdict::Reproduced { writer, reader, panode: node, resource }
+    if second_after.is_some() {
+        LeakVerdict::Reproduced { writer: first, reader: second, panode: node, resource }
     } else {
         LeakVerdict::NotReproduced {
-            reason: format!("reader {reader} did not read {target} after {writer}'s write"),
+            reason: format!("{second} did not {second_kind} {target} after {first}'s {first_kind}"),
         }
     }
 }
@@ -484,7 +582,18 @@ mod tests {
             reason: "test".into(),
             panode: node,
             resource: None,
+            pattern: SchedulePattern::WriteThenRead,
             steps: vec![step(writer, node), step(reader, node)],
+        }
+    }
+
+    fn plan_pat(first: &str, second: &str, node: u64, pattern: SchedulePattern) -> SchedulePlan {
+        SchedulePlan {
+            reason: "test".into(),
+            panode: node,
+            resource: None,
+            pattern,
+            steps: vec![step(first, node), step(second, node)],
         }
     }
 
@@ -558,6 +667,7 @@ mod tests {
             reason: "test".into(),
             panode: 10, // the write node; read is on a different node
             resource: Some("res:900".into()),
+            pattern: SchedulePattern::WriteThenRead,
             steps: vec![step("alice", 10), step("bob", 20)],
         };
         let replay = json!({ "accesses": [
@@ -582,6 +692,7 @@ mod tests {
             reason: "test".into(),
             panode: 10,
             resource: Some("res:900".into()),
+            pattern: SchedulePattern::WriteThenRead,
             steps: vec![step("alice", 10), step("bob", 20)],
         };
         let replay = json!({ "accesses": [
@@ -589,6 +700,73 @@ mod tests {
             { "seq": 2, "principal": "bob",   "panode": 20, "access": "Read",  "resource": "res:901" }
         ]});
         assert!(!verify_replay(&plan, &replay).reproduced());
+    }
+
+    // write-then-write: alice wrote res:5, mallory (not owner, not granted) overwrites
+    // it. A schedule is generated for the integrity ordering, and the replay reproduces
+    // it only when mallory's write follows alice's.
+    #[test]
+    fn generate_and_verify_write_then_write() {
+        let obs = json!({
+            "accesses": [
+                { "seq": 1, "principal": "alice",   "panode": 10, "access": "Write", "resource": "res:5", "site": 10 },
+                { "seq": 2, "principal": "mallory", "panode": 10, "access": "Write", "resource": "res:5", "site": 10 }
+            ],
+            "overlaps": []
+        });
+        let plans = generate_schedules(&obs, 20);
+        let wtw = plans
+            .iter()
+            .find(|p| p.pattern == SchedulePattern::WriteThenWrite)
+            .expect("expected a write-then-write schedule");
+        assert_eq!(wtw.steps[0].principal, "alice");
+        assert_eq!(wtw.steps[1].principal, "mallory");
+
+        let replay = json!({ "accesses": [
+            { "seq": 1, "principal": "alice",   "panode": 10, "access": "Write", "resource": "res:5" },
+            { "seq": 2, "principal": "mallory", "panode": 10, "access": "Write", "resource": "res:5" }
+        ]});
+        assert!(verify_replay(wtw, &replay).reproduced());
+        // reverse order does not reproduce the ordering
+        let rev = json!({ "accesses": [
+            { "seq": 1, "principal": "mallory", "panode": 10, "access": "Write", "resource": "res:5" }
+        ]});
+        assert!(!verify_replay(wtw, &rev).reproduced());
+    }
+
+    // read-then-write: alice read res:7, mallory (not owner, not granted) then writes.
+    #[test]
+    fn verify_read_then_write() {
+        let plan = plan_pat("alice", "mallory", 30, SchedulePattern::ReadThenWrite);
+        let replay = json!({ "accesses": [
+            { "seq": 1, "principal": "alice",   "panode": 30, "access": "Read"  },
+            { "seq": 2, "principal": "mallory", "panode": 30, "access": "Write" }
+        ]});
+        assert!(verify_replay(&plan, &replay).reproduced());
+        // a read-then-read must NOT reproduce a read-then-write schedule
+        let rr = json!({ "accesses": [
+            { "seq": 1, "principal": "alice",   "panode": 30, "access": "Read" },
+            { "seq": 2, "principal": "mallory", "panode": 30, "access": "Read" }
+        ]});
+        assert!(!verify_replay(&plan, &rr).reproduced());
+    }
+
+    // A granted collaborator's overwrite generates NO integrity schedule.
+    #[test]
+    fn granted_co_writer_no_integrity_schedule() {
+        let obs = json!({
+            "accesses": [
+                { "seq": 1, "principal": "alice", "panode": 10, "access": "Write", "resource": "res:5", "site": 10, "authorized": ["bob"] },
+                { "seq": 2, "principal": "bob",   "panode": 10, "access": "Write", "resource": "res:5", "site": 10 }
+            ],
+            "overlaps": []
+        });
+        let plans = generate_schedules(&obs, 20);
+        assert!(
+            !plans.iter().any(|p| p.pattern == SchedulePattern::WriteThenWrite
+                || p.pattern == SchedulePattern::ReadThenWrite),
+            "granted co-writer must not produce an integrity schedule"
+        );
     }
 
     // generate_schedules builds a resource-linked schedule when a write and a read

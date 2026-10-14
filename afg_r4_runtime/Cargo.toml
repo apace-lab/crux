@@ -1,5 +1,5 @@
 [package]
-name = "afg_runtime"
+name = "afg_r4_runtime"
 version = "0.1.0"
 edition = "2021"
 
