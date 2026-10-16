@@ -254,7 +254,7 @@ pub fn instrument_project(
         by_file.entry(site.file.clone()).or_default().push(site);
     }
 
-    // Crates we actually rewrite; the crux_r4_runtime dep is added to each of these (a
+    // Crates we actually rewrite; the crux_runtime dep is added to each of these (a
     // real app can be a cargo workspace, so the dep must go in each member crate,
     // not the workspace root).
     let mut runtime_manifests: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -315,7 +315,7 @@ pub fn instrument_project(
                             let tmpl = resource_expr.clone().unwrap_or_else(|| "{}".to_string());
                             let id_access = tmpl.replace("{}", "__crux_v");
                             let macros = format!(
-                                "crux_r4_runtime::crux_monitor!(function = {fn_id}); crux_r4_runtime::crux_access!(node = {panode}, kind = crux_r4_runtime::AccessKind::{kind}, function = {fn_id}, resource = format!(\"{prefix}:{{:?}}\", {id_access}));"
+                                "crux_runtime::crux_monitor!(function = {fn_id}); crux_runtime::crux_access!(node = {panode}, kind = crux_runtime::AccessKind::{kind}, function = {fn_id}, resource = format!(\"{prefix}:{{:?}}\", {id_access}));"
                             );
                             expr_wraps.push((site.line, name.clone(), macros));
                             continue;
@@ -343,13 +343,13 @@ pub fn instrument_project(
                     };
                     let access_call = match (runtime_resource, resource) {
                         (Some(expr), _) => format!(
-                            "crux_r4_runtime::crux_access!(node = {panode}, kind = crux_r4_runtime::AccessKind::{kind}, function = {fn_id}, resource = {expr});"
+                            "crux_runtime::crux_access!(node = {panode}, kind = crux_runtime::AccessKind::{kind}, function = {fn_id}, resource = {expr});"
                         ),
                         (None, Some(r)) => format!(
-                            "crux_r4_runtime::crux_access!(node = {panode}, kind = crux_r4_runtime::AccessKind::{kind}, function = {fn_id}, resource = \"res:{r}\");"
+                            "crux_runtime::crux_access!(node = {panode}, kind = crux_runtime::AccessKind::{kind}, function = {fn_id}, resource = \"res:{r}\");"
                         ),
                         (None, None) => format!(
-                            "crux_r4_runtime::crux_access!(node = {panode}, kind = crux_r4_runtime::AccessKind::{kind}, function = {fn_id});"
+                            "crux_runtime::crux_access!(node = {panode}, kind = crux_runtime::AccessKind::{kind}, function = {fn_id});"
                         ),
                     };
                     // Insert before the enclosing STATEMENT, not the call line.
@@ -370,7 +370,7 @@ pub fn instrument_project(
                                     // a block that fires the probe and returns the value. Done
                                     // after the per-site loop (inline, preserving line numbers).
                                     let macros_inline = format!(
-                                        "crux_r4_runtime::crux_monitor!(function = {fn_id}); {access_call}"
+                                        "crux_runtime::crux_monitor!(function = {fn_id}); {access_call}"
                                     );
                                     expr_wraps.push((site.line, name.to_string(), macros_inline));
                                     continue;
@@ -391,12 +391,12 @@ pub fn instrument_project(
                         .unwrap_or_else(|| enclosing_is_async(&lines, idx));
                     let gate = match (schedule_site, call_name) {
                         (Some(sched), Some(_)) if is_async => {
-                            format!("crux_r4_runtime::crux_schedule_point!(site = {sched}).await;\n")
+                            format!("crux_runtime::crux_schedule_point!(site = {sched}).await;\n")
                         }
                         _ => String::new(),
                     };
                     let injected = format!(
-                        "{gate}crux_r4_runtime::crux_monitor!(function = {fn_id});\n{access_call}"
+                        "{gate}crux_runtime::crux_monitor!(function = {fn_id});\n{access_call}"
                     );
                     inserts.push((idx, injected));
                 }
@@ -416,7 +416,7 @@ pub fn instrument_project(
                         // {:?}, else a fallback label), so this compiles whatever the
                         // captured return value's type is.
                         let auth_macro = format!(
-                            "crux_r4_runtime::crux_auth!(principal = crux_r4_runtime::crux_principal!({principal_access}), method = \"crux-static\", permissions = [\"*\".to_string()], duration_ms = None);"
+                            "crux_runtime::crux_auth!(principal = crux_runtime::crux_principal!({principal_access}), method = \"crux-static\", permissions = [\"*\".to_string()], duration_ms = None);"
                         );
                         expr_wraps.push((site.line, call_name.clone(), auth_macro));
                         continue;
@@ -439,7 +439,7 @@ pub fn instrument_project(
                             // errors); `is_valid_request` passes a non-Debug struct.
                             // `crux_principal!` resolves both at compile time.
                             let injected = format!(
-                                "crux_r4_runtime::crux_auth!(principal = crux_r4_runtime::crux_principal!({principal}), method = \"crux-static\", permissions = [\"*\".to_string()], duration_ms = None);"
+                                "crux_runtime::crux_auth!(principal = crux_runtime::crux_principal!({principal}), method = \"crux-static\", permissions = [\"*\".to_string()], duration_ms = None);"
                             );
                             // BUG B: place the probe at the enclosing STATEMENT
                             // boundary, not blindly before the call line. An auth check
@@ -508,7 +508,7 @@ pub fn instrument_project(
     // SOURCE-level DAO resource capture (for async_trait-erased ORM calls the IR
     // cannot see) and tokio::spawn principal propagation. Both walk the whole copied
     // tree; EVERY crate that receives an injection is recorded so it gets the
-    // crux_r4_runtime dependency below. (This also fixes the earlier bug where a crate
+    // crux_runtime dependency below. (This also fixes the earlier bug where a crate
     // that only got a spawn-wrap, or only a source-DAO capture, was left without the
     // dep because the dep was added before these passes ran.)
     let mut source_dao_total = 0usize;
@@ -564,7 +564,7 @@ pub fn instrument_project(
         println!("[instrument] wrapped {wrapped_total} tokio::spawn site(s) with with_current_context");
     }
 
-    // Make the crux_r4_runtime macros available in EVERY crate we injected into (plan
+    // Make the crux_runtime macros available in EVERY crate we injected into (plan
     // sites + source-DAO + spawn-wraps, all collected in runtime_manifests above).
     // Fall back to the project root for a single-crate app with no recorded member.
     if runtime_manifests.is_empty() {
@@ -579,7 +579,7 @@ pub fn instrument_project(
 }
 
 /// Wrap the future argument of `tokio::spawn(...)` and `tokio::task::spawn(...)`
-/// with `crux_r4_runtime::with_current_context(...)`, so the spawned task carries the
+/// with `crux_runtime::with_current_context(...)`, so the spawned task carries the
 /// current principal (task-locals are not inherited across a spawn). Returns the
 /// rewritten source and the number of wraps applied.
 ///
@@ -615,10 +615,10 @@ fn wrap_spawns(text: &str) -> (String, usize) {
                         let inner = &text[open + 1..close];
                         let already = inner
                             .trim_start()
-                            .starts_with("crux_r4_runtime::with_current_context");
+                            .starts_with("crux_runtime::with_current_context");
                         if !already && !inner.trim().is_empty() {
                             out.push_str(pat); // "...spawn("
-                            out.push_str("crux_r4_runtime::with_current_context(");
+                            out.push_str("crux_runtime::with_current_context(");
                             out.push_str(inner);
                             out.push(')'); // close with_current_context
                             out.push(')'); // close spawn
@@ -953,13 +953,13 @@ fn extract_first_arg(line: &str, call_name: &str) -> Option<String> {
     }
 }
 
-/// Append an `crux_r4_runtime` path dependency to the instrumented app's Cargo.toml
+/// Append an `crux_runtime` path dependency to the instrumented app's Cargo.toml
 /// (idempotent), so the injected macros resolve.
 fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Result<()> {
     let mut text = fs::read_to_string(manifest).with_context(|| {
         format!("instrumented app has no Cargo.toml at {}", manifest.display())
     })?;
-    if text.contains("crux_r4_runtime") {
+    if text.contains("crux_runtime") {
         return Ok(());
     }
     let abs = fs::canonicalize(runtime_crate_path)
@@ -968,7 +968,7 @@ fn ensure_runtime_dependency(manifest: &Path, runtime_crate_path: &Path) -> Resu
         text.push('\n');
     }
     text.push_str(&format!(
-        "\n[dependencies.crux_r4_runtime]\npath = {:?}\n",
+        "\n[dependencies.crux_runtime]\npath = {:?}\n",
         abs.display().to_string()
     ));
     fs::write(&manifest, text)?;
@@ -1033,7 +1033,7 @@ fn inject_source_dao_accesses(text: &str, rules: &[SourceDaoRule]) -> (String, u
                 None => format!("{binding}{}", rule.id_expr),
             };
             let stmt = format!(
-                "crux_r4_runtime::crux_monitor!(function = {fid}); crux_r4_runtime::crux_access!(node = {node}, kind = crux_r4_runtime::AccessKind::{kind}, function = {fid}, resource = format!(\"{prefix}:{{:?}}\", {resource_val}), count = {count}{authz_clause}{principal_clause});"
+                "crux_runtime::crux_monitor!(function = {fid}); crux_runtime::crux_access!(node = {node}, kind = crux_runtime::AccessKind::{kind}, function = {fid}, resource = format!(\"{prefix}:{{:?}}\", {resource_val}), count = {count}{authz_clause}{principal_clause});"
             );
             inserts.push((end_line, stmt));
         }
@@ -1470,7 +1470,7 @@ fn inject_serve_captures(
             // exactly 1 row. Structural, app-agnostic, no per-app input.
             let count = 1u64;
             let stmt = format!(
-                "for {item} in ({items}).iter() {{ crux_r4_runtime::crux_monitor!(function = {fid}); crux_r4_runtime::crux_access!(node = {node}, kind = crux_r4_runtime::AccessKind::{kind}, function = {fid}, resource = {resource_val}, count = {count}{authz_clause}{principal_clause}); }}"
+                "for {item} in ({items}).iter() {{ crux_runtime::crux_monitor!(function = {fid}); crux_runtime::crux_access!(node = {node}, kind = crux_runtime::AccessKind::{kind}, function = {fid}, resource = {resource_val}, count = {count}{authz_clause}{principal_clause}); }}"
             );
             inserts.push((end_line, stmt));
         }
@@ -1614,13 +1614,13 @@ mod spawn_wrap_tests {
     fn wraps_simple_and_qualified() {
         let (out, n) = wrap_spawns("let h = tokio::spawn(fut);");
         assert_eq!(n, 1);
-        assert_eq!(out, "let h = tokio::spawn(crux_r4_runtime::with_current_context(fut));");
+        assert_eq!(out, "let h = tokio::spawn(crux_runtime::with_current_context(fut));");
 
         let (out, n) = wrap_spawns("tokio::task::spawn(async move { work().await; });");
         assert_eq!(n, 1);
         assert_eq!(
             out,
-            "tokio::task::spawn(crux_r4_runtime::with_current_context(async move { work().await; }));"
+            "tokio::task::spawn(crux_runtime::with_current_context(async move { work().await; }));"
         );
     }
 
@@ -1628,7 +1628,7 @@ mod spawn_wrap_tests {
     fn one_wrap_for_whole_argument_with_inner_parens_and_commas() {
         let (out, n) = wrap_spawns("tokio::spawn(handle(a, b))");
         assert_eq!(n, 1);
-        assert_eq!(out, "tokio::spawn(crux_r4_runtime::with_current_context(handle(a, b)))");
+        assert_eq!(out, "tokio::spawn(crux_runtime::with_current_context(handle(a, b)))");
     }
 
     #[test]
@@ -1636,7 +1636,7 @@ mod spawn_wrap_tests {
         let src = r#"tokio::spawn(async { let s = ")x("; let c = ')'; go().await })"#;
         let (out, n) = wrap_spawns(src);
         assert_eq!(n, 1);
-        assert!(out.starts_with("tokio::spawn(crux_r4_runtime::with_current_context(async {"));
+        assert!(out.starts_with("tokio::spawn(crux_runtime::with_current_context(async {"));
         assert!(out.ends_with("go().await }))"));
     }
 
@@ -1660,7 +1660,7 @@ mod spawn_wrap_tests {
 
     #[test]
     fn already_wrapped_is_left_alone() {
-        let src = "tokio::spawn(crux_r4_runtime::with_current_context(fut))";
+        let src = "tokio::spawn(crux_runtime::with_current_context(fut))";
         let (out, n) = wrap_spawns(src);
         assert_eq!(n, 0);
         assert_eq!(out, src);
@@ -2250,7 +2250,7 @@ mod source_dao_tests {
         let (out, n) = inject_source_dao_accesses(src, &[rule("PrivateMessage::read", "Read", 1, None)]);
         assert_eq!(n, 1, "should capture one read: {out}");
         assert!(out.contains("resource = format!(\"pm:{:?}\", pm.id)"), "got: {out}");
-        assert!(out.contains("kind = crux_r4_runtime::AccessKind::Read"), "got: {out}");
+        assert!(out.contains("kind = crux_runtime::AccessKind::Read"), "got: {out}");
         assert!(out.contains("count = 1"), "got: {out}");
         // The principal is passed DIRECTLY on the access (not via a separate crux_auth).
         assert!(out.contains("principal = local_user_view.person.id"), "principal missing: {out}");

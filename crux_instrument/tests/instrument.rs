@@ -1,4 +1,4 @@
-use crux_r4_instrument::{
+use crux_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
 use std::{fs, path::PathBuf};
@@ -20,7 +20,7 @@ fn write_fixture(dir: &PathBuf) {
 }
 
 fn runtime_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crux_r4_runtime")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crux_runtime")
 }
 
 #[test]
@@ -51,19 +51,19 @@ fn adds_runtime_dep_and_qualified_macros() {
 
     instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
-    // Gap 1: the instrumented app depends on crux_r4_runtime.
+    // Gap 1: the instrumented app depends on crux_runtime.
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("crux_r4_runtime"), "runtime dep not added:\n{manifest}");
+    assert!(manifest.contains("crux_runtime"), "runtime dep not added:\n{manifest}");
 
     // Gap 1: macros are inserted fully-qualified (no `use` needed).
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
-        code.contains("crux_r4_runtime::crux_monitor!(function = 210)"),
+        code.contains("crux_runtime::crux_monitor!(function = 210)"),
         "monitor macro missing:\n{code}"
     );
     assert!(
         code.contains(
-            "crux_r4_runtime::crux_access!(node = 1308, kind = crux_r4_runtime::AccessKind::Read, function = 210)"
+            "crux_runtime::crux_access!(node = 1308, kind = crux_runtime::AccessKind::Read, function = 210)"
         ),
         "access macro missing:\n{code}"
     );
@@ -99,8 +99,8 @@ fn basename_fallback_locates_file() {
     instrument_project(&src, &dst, &plan, &runtime_path(), &[], &[], &Default::default()).unwrap();
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
-    assert!(code.contains("crux_r4_runtime::crux_access!(node = 7"), "basename fallback failed:\n{code}");
-    assert!(code.contains("crux_r4_runtime::AccessKind::Write"), "wrong access kind:\n{code}");
+    assert!(code.contains("crux_runtime::crux_access!(node = 7"), "basename fallback failed:\n{code}");
+    assert!(code.contains("crux_runtime::AccessKind::Write"), "wrong access kind:\n{code}");
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn inserts_schedule_point_before_gated_access() {
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     // the replay gate is inserted, awaited, and precedes the access record
     assert!(
-        code.contains("crux_r4_runtime::crux_schedule_point!(site = 911).await;"),
+        code.contains("crux_runtime::crux_schedule_point!(site = 911).await;"),
         "schedule point not inserted:\n{code}"
     );
     let gate = code.find("crux_schedule_point!").unwrap();
@@ -190,7 +190,7 @@ fn inserts_crux_auth_at_auth_site() {
     // The principal is wrapped in crux_principal! so any type (incl. a Debug-only
     // newtype with no Into<String>) stringifies and compiles.
     assert!(
-        code.contains("crux_r4_runtime::crux_auth!(principal = crux_r4_runtime::crux_principal!(user)"),
+        code.contains("crux_runtime::crux_auth!(principal = crux_runtime::crux_principal!(user)"),
         "crux_auth! not inserted with crux_principal!-wrapped principal:\n{code}"
     );
 }
@@ -278,7 +278,7 @@ fn places_crux_auth_before_multiline_if() {
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
-        code.contains("crux_r4_runtime::crux_auth!(principal = crux_r4_runtime::crux_principal!(u)"),
+        code.contains("crux_runtime::crux_auth!(principal = crux_runtime::crux_principal!(u)"),
         "crux_auth! not inserted with wrapped principal:\n{code}"
     );
     // The probe must come BEFORE the `if`, not between condition lines.
@@ -332,7 +332,7 @@ fn skips_crux_auth_for_byte_principal() {
 }
 
 // Regression: a crate that receives ONLY a tokio::spawn wrap (no plan site) must
-// still get the crux_r4_runtime dependency. Previously the dep was added before the
+// still get the crux_runtime dependency. Previously the dep was added before the
 // spawn-wrap pass, so a spawn-only crate was left without it and failed to compile.
 #[test]
 fn spawn_only_crate_still_gets_runtime_dep() {
@@ -357,21 +357,21 @@ fn spawn_only_crate_still_gets_runtime_dep() {
 
     let code = fs::read_to_string(dst.join("src/main.rs")).unwrap();
     assert!(
-        code.contains("crux_r4_runtime::with_current_context"),
+        code.contains("crux_runtime::with_current_context"),
         "spawn was not wrapped:\n{code}"
     );
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
     assert!(
-        manifest.contains("crux_r4_runtime"),
-        "spawn-only crate did not get the crux_r4_runtime dep:\n{manifest}"
+        manifest.contains("crux_runtime"),
+        "spawn-only crate did not get the crux_runtime dep:\n{manifest}"
     );
 }
 
 // Source-DAO end to end through instrument_project: a rule captures the per-instance
-// resource at a `let` binding, and the crate gets the crux_r4_runtime dep.
+// resource at a `let` binding, and the crate gets the crux_runtime dep.
 #[test]
 fn source_dao_rule_injects_and_adds_dep() {
-    use crux_r4_instrument::SourceDaoRule;
+    use crux_instrument::SourceDaoRule;
     let src = fresh("crux_instr_srcdao_src");
     let dst = fresh("crux_instr_srcdao_dst");
     fs::create_dir_all(src.join("src")).unwrap();
@@ -404,5 +404,5 @@ fn source_dao_rule_injects_and_adds_dep() {
     assert!(code.contains("resource = format!(\"thing:{:?}\", pm.id)"), "resource not captured:\n{code}");
     assert!(code.contains("principal = local_user_view.person.id"), "principal not captured on access:\n{code}");
     let manifest = fs::read_to_string(dst.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("crux_r4_runtime"), "source-DAO crate did not get the dep:\n{manifest}");
+    assert!(manifest.contains("crux_runtime"), "source-DAO crate did not get the dep:\n{manifest}");
 }

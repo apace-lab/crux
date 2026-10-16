@@ -1,7 +1,7 @@
 # example-app
 
-A minimal, two-principal demo app used to exercise [`crux_r4_runtime`](../../crux_r4_runtime)
-directly. It depends on `crux_r4_runtime`, not the other way around, and it is
+A minimal, two-principal demo app used to exercise [`crux_runtime`](../../crux_runtime)
+directly. It depends on `crux_runtime`, not the other way around, and it is
 **hand-instrumented**: the `crux_auth!` / `crux_monitor!` / `crux_schedule_point!`
 / `crux_access!` calls in [`src/main.rs`](src/main.rs) are written by hand to
 show what the `crux` pipeline's source-instrumentation step would otherwise
@@ -19,14 +19,14 @@ Two tasks share one in-memory cache behind a single `PANodeId`
 
 Because both principals hit the same node, this is the toy case CRUX is meant
 to catch: bob's read can observe alice's write, i.e. a cross-user leak
-through a shared store. Running it under `crux_r4_runtime` produces a JSONL trace
+through a shared store. Running it under `crux_runtime` produces a JSONL trace
 of both principals' auth/monitor/access/schedule events, which is what
-`crux_observe`/`crux_cuie` (or the dashboard) consume to detect and
+`crux_observe`/`crux_scheduler` (or the dashboard) consume to detect and
 schedule that overlap.
 
 ## Config
 
-Add the absolute path of your `afg_prototype/crux_r4_runtime` to `crux-demp/Cargo.toml`. 
+Add the absolute path of your `crux/crux_runtime` to `crux-demp/Cargo.toml`. 
 
 ## Run in observation-only mode
 
@@ -52,10 +52,10 @@ RUSTFLAGS="--cfg madsim" \
 cargo run
 ```
 
-`schedule.json` (a `Vec<ScheduleStep>`, e.g. produced by `crux_cuie`)
+`schedule.json` (a `Vec<ScheduleStep>`, e.g. produced by `crux_scheduler`)
 forces alice's write before bob's read at their `crux_schedule_point!` sites,
 to deterministically confirm the leak rather than relying on MadSim to pick
-that interleaving by chance. See [`crux_r4_runtime`'s README](../../crux_r4_runtime/README.md)
+that interleaving by chance. See [`crux_runtime`'s README](../../crux_runtime/README.md)
 for the primitives and env vars this app is built on, and the
 [top-level README](../../README.md) for how this fits into the full
 static-analysis + instrumentation + replay pipeline.

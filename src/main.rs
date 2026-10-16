@@ -6,11 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crux_r4_instrument::{
+use crux_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
 use crux_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
-use crux_cuie::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
+use crux_scheduler::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
 
 #[derive(Parser, Debug)]
 #[command(name = "crux")]
@@ -47,9 +47,9 @@ struct Cli {
     #[arg(long, default_value = "../rail-rs/signatures/serve_capture_functions.json")]
     serve_capture: PathBuf,
 
-    /// Path to the crux_r4_runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "crux_r4_runtime")]
-    crux_r4_runtime: PathBuf,
+    /// Path to the crux_runtime crate, added as a dependency to the instrumented app
+    #[arg(long, default_value = "crux_runtime")]
+    crux_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]
     run_dir: PathBuf,
@@ -934,12 +934,12 @@ fn main() -> Result<()> {
     let instrumented_project = cli.run_dir.join("instrumented/app");
     // SOURCE-level DAO capture rules (catalog-driven): recover per-instance
     // resources for ORM calls the IR erases via `#[async_trait]`. Absent file -> none.
-    let source_dao = crux_r4_instrument::load_source_dao_rules(&cli.source_dao)
+    let source_dao = crux_instrument::load_source_dao_rules(&cli.source_dao)
         .with_context(|| format!("loading source-DAO catalog {}", cli.source_dao.display()))?;
     if !source_dao.is_empty() {
         println!("      source-DAO rules: {}", source_dao.len());
     }
-    let serve_capture = crux_r4_instrument::load_serve_capture_rules(&cli.serve_capture)
+    let serve_capture = crux_instrument::load_serve_capture_rules(&cli.serve_capture)
         .with_context(|| format!("loading serve-capture catalog {}", cli.serve_capture.display()))?;
     if !serve_capture.is_empty() {
         println!("      serve-capture rules: {}", serve_capture.len());
@@ -948,7 +948,7 @@ fn main() -> Result<()> {
         &cli.project,
         &instrumented_project,
         &static_result.instrumentation_plan,
-        &cli.crux_r4_runtime,
+        &cli.crux_runtime,
         &source_dao,
         &serve_capture,
         &static_result.struct_fields,
@@ -1060,7 +1060,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{data_access_kind, establishes_principal};
-    use crux_r4_instrument::AccessKind;
+    use crux_instrument::AccessKind;
 
     #[test]
     fn data_access_direction_from_category() {

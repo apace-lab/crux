@@ -12,7 +12,7 @@ anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 
 # The dashboard does the analysis itself, so it depends only on the pure CRUX
-# analysis crates (siblings in afg_prototype). It never runs an app; it reads the
+# analysis crates (siblings in crux). It never runs an app; it reads the
 # trace / run-dir files any CRUX-instrumented app or pipeline run already writes.
 crux_observe = { path = "../crux_observe" }
-crux_cuie = { path = "../crux_cuie" }
+crux_scheduler = { path = "../crux_scheduler" }

@@ -1,4 +1,4 @@
-use crux_r4_runtime::{
+use crux_runtime::{
     crux_access, crux_auth, crux_monitor, crux_schedule_point, with_crux_context, AccessKind, CruxContext,
 };
 use std::sync::{Arc, Mutex};

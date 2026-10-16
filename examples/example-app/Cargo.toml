@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-crux_r4_runtime = { path = "../../crux_r4_runtime" }
+crux_runtime = { path = "../../crux_runtime" }
 madsim = "=0.2.31"
 tokio = { version = "=0.2.30", package = "madsim-tokio", features = ["rt", "sync", "macros", "time"] }

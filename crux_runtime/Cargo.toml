@@ -1,5 +1,5 @@
 [package]
-name = "crux_r4_runtime"
+name = "crux_runtime"
 version = "0.1.0"
 edition = "2021"
 

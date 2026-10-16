@@ -101,7 +101,7 @@ pub fn current_context() -> CruxContext {
 /// spawned future with this to carry the principal across the spawn boundary:
 ///
 /// ```ignore
-/// tokio::spawn(crux_r4_runtime::with_current_context(async move { /* ... */ }));
+/// tokio::spawn(crux_runtime::with_current_context(async move { /* ... */ }));
 /// ```
 ///
 /// The context is captured eagerly (in the calling task, where the principal is
@@ -120,7 +120,7 @@ where
 /// When instrumenting a real application, prefer wrapping the app's own
 /// `tokio::spawn` argument with [`with_current_context`] (so the app's own tokio
 /// version and `JoinHandle` type are used). This helper is for CRUX's own
-/// demos/harnesses, where crux_r4_runtime's tokio is the one in use.
+/// demos/harnesses, where crux_runtime's tokio is the one in use.
 pub fn crux_spawn<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -386,13 +386,13 @@ fn schedule_state() -> &'static Mutex<ScheduleState> {
 }
 
 /// Name of the artificial second user the scheduler synthesizes for single-user
-/// apps. Must match `crux_cuie::SYNTHETIC_PRINCIPAL`.
-pub const SYNTHETIC_PRINCIPAL: &str = "afg-synthetic";
+/// apps. Must match `crux_scheduler::SYNTHETIC_PRINCIPAL`.
+pub const SYNTHETIC_PRINCIPAL: &str = "crux-synthetic";
 
 /// Whether the loaded replay schedule includes `principal` as a step. An app can
 /// use this to inject a synthetic second user ONLY during a synthetic replay:
 /// the schedule is empty during observation (so this is false then), and carries
-/// the synthesized `afg-synthetic` steps during the replay that tests the leak.
+/// the synthesized `crux-synthetic` steps during the replay that tests the leak.
 pub fn schedule_contains_principal(principal: &str) -> bool {
     schedule_state()
         .lock()
@@ -481,7 +481,7 @@ pub async fn schedule_point(site: PACallSiteID, file: &'static str, line: u32) {
         spins += 1;
         if spins >= max_spins {
             eprintln!(
-                "[crux_r4_runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
+                "[crux_runtime] schedule gate gave up at site {site} for {principal:?} after {spins} spins (divergent replay path); proceeding ungated"
             );
             return;
         }

@@ -9,6 +9,6 @@ clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rail-rs = { path = "../rail-rs" }
-crux_r4_instrument = { path = "crux_r4_instrument" }
+crux_instrument = { path = "crux_instrument" }
 crux_observe = { path = "crux_observe" }
-crux_cuie = { path = "crux_cuie" }
+crux_scheduler = { path = "crux_scheduler" }

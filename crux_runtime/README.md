@@ -2,7 +2,7 @@
 
 A source-level runtime observation layer for CRUX + MadSim. Instrumented apps
 depend on this crate and call its macros at the auth/monitor/access/schedule
-sites `crux_r4_instrument` inserts; see the [top-level README](../README.md) for
+sites `crux_instrument` inserts; see the [top-level README](../README.md) for
 where this fits in the CRUX pipeline, and
 [`examples/example-app`](../examples/example-app) for a minimal, hand-instrumented
 app built against it (with run commands).
@@ -35,8 +35,8 @@ app built against it (with run commands).
   trace event.
 
 For an app with only one real principal, the scheduler can synthesize a
-second one (`SYNTHETIC_PRINCIPAL`, i.e. `afg-synthetic`) to test a leak; an
-app can check `schedule_contains_principal("afg-synthetic")` to know whether
+second one (`SYNTHETIC_PRINCIPAL`, i.e. `crux-synthetic`) to test a leak; an
+app can check `schedule_contains_principal("crux-synthetic")` to know whether
 to inject that synthetic user, since the check is only true during such a
 replay, not during plain observation.
 

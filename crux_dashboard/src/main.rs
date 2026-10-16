@@ -4,10 +4,10 @@
 //   --trace <file.jsonl>  a live CRUX trace to tail (a running service)
 //   --run-dir <dir>       a finished pipeline run (observe/*.jsonl + result/verdict-*.json)
 //
-// It runs the real `crux_observe::analyze_traces` + `crux_cuie::generate_schedules`
+// It runs the real `crux_observe::analyze_traces` + `crux_scheduler::generate_schedules`
 // over the trace(s) and serves a browser console showing events, per-principal
 // scopes, cross-user overlaps, schedules, any replay verdicts, and any optional
-// app-reported leaks (crux_r4_runtime `Leak` events).
+// app-reported leaks (crux_runtime `Leak` events).
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -17,7 +17,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crux_observe::analyze_traces;
-use crux_cuie::generate_schedules;
+use crux_scheduler::generate_schedules;
 
 #[derive(Parser, Debug)]
 #[command(name = "crux-dashboard")]
@@ -165,7 +165,7 @@ async fn crux_state(State(src): State<Arc<Source>>) -> Json<CruxState> {
     let schedules = generate_schedules(&obs, 20);
     let events = read_events(&src.traces);
 
-    // App-reported leaks (crux_r4_runtime `leak` events) plus CRUX-derived
+    // App-reported leaks (crux_runtime `leak` events) plus CRUX-derived
     // resource-linked leaks (a cross-user read of a resource instance that
     // returned another principal's rows). Both render in the same leak UI.
     let mut leaks: Vec<LeakItem> = events

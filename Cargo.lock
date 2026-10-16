@@ -141,21 +141,24 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "crux_cuie",
+ "crux_instrument",
  "crux_observe",
- "crux_r4_instrument",
+ "crux_scheduler",
  "rail-rs",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "crux_cuie"
+name = "crux_instrument"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "proc-macro2",
  "serde",
  "serde_json",
+ "syn 2.0.119",
+ "walkdir",
 ]
 
 [[package]]
@@ -168,15 +171,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "crux_r4_instrument"
+name = "crux_scheduler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "proc-macro2",
  "serde",
  "serde_json",
- "syn 2.0.119",
- "walkdir",
 ]
 
 [[package]]

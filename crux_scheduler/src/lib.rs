@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 /// Name given to the artificial second user synthesized when only one real user
 /// is observed (see `generate_schedules`).
-pub const SYNTHETIC_PRINCIPAL: &str = "afg-synthetic";
+pub const SYNTHETIC_PRINCIPAL: &str = "crux-synthetic";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduleStep {
