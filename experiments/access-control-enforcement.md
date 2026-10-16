@@ -83,19 +83,33 @@ plainly in the paper.
 - [x] zed DONE -> zed-repro/results/ACCESS_CONTROL_ENFORCEMENT.md. Path/subsystem-sensitive: buffer join read dominated; buffer edit broadcast UN-dominated (removal/downgrade not evicted) = LEAK; project worktree broadcast dominated (collaborator lifecycle coupled). All 4 apps done.
 
 
-## Enforcement-style taxonomy (all 4 apps done, 2026-09-23)
+## Enforcement-style taxonomy (all 5 apps done)
 
 The pass distinguishes WHERE each app puts its check, which predicts the failure mode:
 
-| app | check location | omittable per-path? | verdict |
+| app | check location | omittable per-path/time? | verdict |
 |---|---|---|---|
 | tabby | HTTP resolver (check_read_thread) | yes -> convert_thread_to_page omits it | LEAK |
 | AppFlowy | storage method (get_full_encode_collab) | yes -> batch_get_collab omits it | LEAK |
 | bionic | embedded in the query (user_id=current_app_user()), fail-closed | no | no leak |
 | zed | membership check at join; live-session delivery recipients | yes (temporal: not revalidated after revocation) | LEAK |
+| spiceai | cache-key namespace (CacheNamespace::Principal), fail-open | not in this commit (both auth types set stable_id) | no leak |
 
 Key insight for the paper: leaks arise wherever the check is a SEPARABLE step some
-path/time can skip; bionic (check embedded in the query, principal mandatory) is the
-only one where it cannot be skipped, and it is the only true negative. The
-access-control-enforcement analysis = find data-access sites where the dominating check
-is separable and some path/time omits it.
+path or moment can skip. The two true negatives are safe for opposite reasons: bionic
+makes the check UNSKIPPABLE (embedded in the query, fail-closed), while spiceai keeps the
+check separable but SKIP-FREE IN PRACTICE (a per-principal cache-key namespace that both
+shipping auth types populate) and FAIL-OPEN by design (a missing principal collapses to
+the shared namespace, one forgotten override away from a leak; spiceai's own regression
+history shows two such leaks already found and fixed). So the safety spectrum is:
+unskippable/fail-closed (bionic) > separable-but-currently-complete/fail-open (spiceai) >
+separable-and-omitted (tabby, AppFlowy, zed = leaks). The access-control-enforcement
+analysis = find data-access sites where the dominating check is separable and some path
+or moment omits it.
+
+## Status: spiceai (5th app)
+
+- [x] spiceai DONE -> spiceai-repro/results/RESULTS.md. TRUE NEGATIVE, dynamically
+  confirmed (caching_accelerator_isolates_per_principal_e2e passes; bob never served
+  alice's cached row). New mechanism: per-principal cache-key namespacing, fail-open.
+  LLVM 20 -> dynamic + code audit (like bionic, zed).

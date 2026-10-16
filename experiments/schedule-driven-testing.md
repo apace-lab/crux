@@ -1,6 +1,6 @@
-# Schedule-driven testing in AFG
+# Schedule-driven testing in CRUX
 
-Technical write-up of AFG's schedule-driven testing: what it does, the result on
+Technical write-up of CRUX's schedule-driven testing: what it does, the result on
 zed, how to reproduce it, and what output to expect. All numbers come from real runs
 on real code (zed collab server, commit `739fdbe`); file and test names are exact.
 
@@ -26,16 +26,16 @@ Schedule-driven testing has three components and one loop.
    makes the executor choose a different order for pending tasks. A seed is therefore
    a handle to one point in the schedule space. (Apps without such an executor, e.g.
    the Tokio-based targets, would need a deterministic runtime simulator such as
-   madsim. AFG's own scheduler with madsim replay is exercised on a controlled demo,
+   madsim. CRUX's own scheduler with madsim replay is exercised on a controlled demo,
    see `scheduler-demo-repro/results/RESULTS.md`.)
 
 2. Probes. `crates/collab/src/afg_probe.rs` plus call sites in `crates/collab/src/rpc.rs`
    record, per principal: the membership check outcome, the channel-buffer read at
    join (`join_channel_buffer`), and the delivery of each edit to each recipient in the
    `update_channel_buffer` broadcast. Each run writes a JSONL trace to the path in the
-   `AFG_TRACE_PATH` environment variable; with the variable unset the probes are no-ops.
+   `CRUX_TRACE_PATH` environment variable; with the variable unset the probes are no-ops.
 
-3. Verdict (`afg_prototype/afg_observe`). It reads a trace and applies the
+3. Verdict (`afg_prototype/crux_observe`). It reads a trace and applies the
    resource-linked rule: for each resource instance, the owner is the first principal
    to write it; if another principal reads that instance and is served rows (count > 0),
    that is a confirmed leak. This distinguishes a coarse overlap (two principals reach
@@ -144,7 +144,7 @@ Run one seed of the schedule-dependent race, writing a trace:
 
 ```sh
 docker run --rm -v <zed>:/zed -v zed_target:/target ... \
-  -e CARGO_TARGET_DIR=/target -e AFG_TRACE_PATH=/zed/trace.jsonl -e SEED=2 -w /zed <image> \
+  -e CARGO_TARGET_DIR=/target -e CRUX_TRACE_PATH=/zed/trace.jsonl -e SEED=2 -w /zed <image> \
   bash -c 'export PATH=/usr/local/cargo/bin:$PATH; \
     cargo test -p collab --test collab_tests --features test-support -- \
     channel_buffer_tests::test_afg_join_removal_race --exact'
@@ -155,7 +155,7 @@ Sweep 40 seeds and classify each as leak or clean: `zed-repro` ships `afg_race2_
 writes one trace per seed, and records leak/clean to a CSV. Take the verdict on a trace:
 
 ```sh
-cd afg_prototype/afg_observe
+cd afg_prototype/crux_observe
 cargo run --example analyze -- <trace>.jsonl
 ```
 
@@ -167,7 +167,7 @@ traces) and `zed-repro/results/projleave/` (project control sweep).
 - A trace is JSONL, one event per line: `auth` events (principal, method) and `access`
   events (principal, node, kind `read`/`write`, resource, count). Node 7300 is the
   channel-buffer store; node 7400 is the project worktree.
-- `afg_observe` on a leaking race seed prints
+- `crux_observe` on a leaking race seed prints
   `resource-linked leak verdict: 1 confirmed leak(s)` with a line naming the reader,
   the owner, the resource instance, and the row count.
 - The race sweep CSV shows leak on roughly 15 of 40 seeds, clean on the rest, with the
@@ -197,7 +197,7 @@ traces) and `zed-repro/results/projleave/` (project control sweep).
 - Only zed provides a deterministic scheduler natively. The Tokio targets (tabby,
   bionic, AppFlowy) were single-run reproductions; sweeping schedules on them would
   require a deterministic runtime simulator (madsim), which none of them build under.
-  AFG's own scheduler with madsim replay is validated on a controlled demo
+  CRUX's own scheduler with madsim replay is validated on a controlled demo
   (`scheduler-demo-repro/results/RESULTS.md`): it generates 2 alternative interleavings
   and reproduces the write-then-read cache leak on the second (1/2 schedules), each
   replay about 23 ms.
