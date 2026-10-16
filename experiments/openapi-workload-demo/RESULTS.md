@@ -56,10 +56,10 @@ The emitted trace:
 
 So the OpenAPI-driven two-user workload feeds AFG's native oracle: the vulnerable read (count 1,
 non-owner) is the confirmed leak; the ownership-checked read (count 0) is dominated and not
-flagged. In a tokio app, `afg_instrument` + `afg_runtime` inject these events automatically with
+flagged. In a tokio app, `afg_r4_instrument` + `afg_r4_runtime` inject these events automatically with
 the task-local principal; this sync tiny_http server emits the same JSONL format directly (the
-afg_runtime context is a tokio task-local, so it does not apply to a sync server). The
-`afg_schedule_point!` gates let `afg_scheduler` then permute the two-user interleavings.
+afg_r4_runtime context is a tokio task-local, so it does not apply to a sync server). The
+`afg_schedule_point!` gates let `afg_cuie` then permute the two-user interleavings.
 
 ## Honest scope
 
@@ -69,7 +69,7 @@ afg_runtime context is a tokio task-local, so it does not apply to a sync server
 - It needs a tiny per-app auth seed (how two users log in). Not literally zero-input.
 - Request-value synthesis is schema-based; deeper stateful chains (multi-step producer ->
   consumer across several resource types) are the RESTler-style extension.
-- The AFG-native oracle integration (instrument `notes_app`, run under `afg_runtime`, read the
+- The AFG-native oracle integration (instrument `notes_app`, run under `afg_r4_runtime`, read the
   trace with `afg_observe`) is the existing dynamic stage and is the next wiring step; this
   prototype validates the workload generator itself.
 

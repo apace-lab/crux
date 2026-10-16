@@ -1,8 +1,8 @@
-# AFG on TabbyML/tabby
+# CRUX on TabbyML/tabby
 
-Runs AFG against TabbyML/tabby, a real self-hosted AI coding assistant (~45k lines
+Runs CRUX against TabbyML/tabby, a real self-hosted AI coding assistant (~45k lines
 of Rust), and reproduces a cross-user data leak: one user can read another user's
-chat thread. Target: tabby commit `21b2904` (branch `nightly`). Of AFG's three
+chat thread. Target: tabby commit `21b2904` (branch `nightly`). Of CRUX's three
 targets this is the leak case (bionic-gpt and AppFlowy-Cloud are the clean ones).
 
 ## What we found
@@ -29,7 +29,7 @@ access  bob    node 7000  Read      bob reads alice's thread
 leak    bob    owner alice          bob served "ALICE-PRIVATE: quarterly numbers"
 ```
 
-`afg_observe` over that trace:
+`crux_observe` over that trace:
 
 ```
 overlap: alice <-> bob on node 7000
@@ -43,14 +43,14 @@ row-level security, AppFlowy-Cloud puts it in casbin; tabby has neither.
 
 ## How to reproduce
 
-Prerequisites: this AFG checkout with the producer built (rustc 1.85 emits LLVM 19
+Prerequisites: this CRUX checkout with the producer built (rustc 1.85 emits LLVM 19
 IR, LLVM 19 at `/opt/homebrew/opt/llvm@19`), the sqlite3 CLI, and a tabby checkout
-at `$TABBY` (`cargo fetch`-ed). Put the absolute path of `afg_prototype/afg_runtime`
+at `$TABBY` (`cargo fetch`-ed). Put the absolute path of `afg_prototype/crux_r4_runtime`
 in the harness Cargo.toml. Build the producer once:
 
 ```sh
-cd ../..                      # $AFG_ROOT/afg_prototype
-LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin afg
+cd ../..                      # $CRUX_ROOT/afg_prototype
+LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin crux
 ```
 
 Then run the three stages:
@@ -63,25 +63,25 @@ bash scripts/03_dynamic.sh       # drive tabby's real DB code as two users -> tr
 ```
 
 Outputs land in `out/` (gitignored). Paths are configurable in `scripts/config.sh`
-(or via env: `AFG_ROOT`, `TABBY`, `LLVM_SYS_191_PREFIX`, `RUST`, `DB`). View the
+(or via env: `CRUX_ROOT`, `TABBY`, `LLVM_SYS_191_PREFIX`, `RUST`, `DB`). View the
 trace in the dashboard:
 
 ```sh
-cd ../../afg_dashboard
+cd ../../crux_dashboard
 cargo run -- --trace ../experiments/tabby-repro/out/trace.jsonl   # http://127.0.0.1:8090
 ```
 
 What each stage does: 01 applies tabby's `*.up.sql` migrations to a throwaway
 sqlite file (sqlx's compile-time `query!` macros need a live schema); 02 emits
-`tabby-webserver` to IR on rustc 1.85 and runs `afg --static-only`
-(`AFG_APP_CRATE=tabby_webserver`, a lib crate with no `main`); 03 copies the
+`tabby-webserver` to IR on rustc 1.85 and runs `crux --static-only`
+(`CRUX_APP_CRATE=tabby_webserver`, a lib crate with no `main`); 03 copies the
 harness into the tabby workspace, runs it, and restores the checkout.
 
-## What is real tabby vs AFG scaffolding
+## What is real tabby vs CRUX scaffolding
 
 Real tabby: the schema and 49 migrations, `new_in_memory`, `create_user`,
 `create_thread`, `create_thread_message`, `list_thread_messages`, the unscoped
-query, and the leak. Hand-added: the per-request `with_afg_context` wrap and the
+query, and the leak. Hand-added: the per-request `with_crux_context` wrap and the
 node id 7000 standing for the shared `thread_messages` table the static pass
 flagged. This db-crate harness was the early approach; the bionic and AppFlowy
 experiments instrument the real app end to end instead. The instrumenter now

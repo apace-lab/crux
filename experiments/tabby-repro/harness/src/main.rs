@@ -1,4 +1,4 @@
-// AFG dynamic cross-user check against TabbyML/tabby's REAL access-control code.
+// CRUX dynamic cross-user check against TabbyML/tabby's REAL access-control code.
 //
 // This is the corrected, path-sensitive demonstration. The earlier version drove
 // tabby-db's list_thread_messages directly, which bypasses the resolver layer. The
@@ -16,18 +16,18 @@
 //     (get-for-existence, then list_thread_messages, no check) serves bob alice's
 //     private thread.
 // It does not run the LLM page generation that follows the read; the data is already
-// exfiltrated at the read, which is what the AFG probe records.
-use afg_runtime::{with_afg_context, AfgContext};
+// exfiltrated at the read, which is what the CRUX probe records.
+use crux_r4_runtime::{with_crux_context, CruxContext};
 use tabby_db::DbConn;
 use tabby_schema::policy::AccessPolicy;
 use tabby_schema::AsID;
 
-// The shared thread_messages store (what AFG flagged in threads.rs).
+// The shared thread_messages store (what CRUX flagged in threads.rs).
 const THREADS_NODE: u64 = 7000;
 const HANDLER_FN: u64 = 770077;
 
-fn ctx(principal: &str) -> AfgContext {
-    AfgContext {
+fn ctx(principal: &str) -> CruxContext {
+    CruxContext {
         principal: Some(principal.to_string()),
         auth: None,
     }
@@ -48,10 +48,10 @@ async fn main() {
     // Alice creates a PRIVATE (ephemeral) thread and posts a private message.
     // is_ephemeral = true means the thread is NOT shared: check_read_thread must
     // refuse non-owners. This is the data-WRITE to the shared thread store.
-    let alice_thread = with_afg_context(ctx("alice@example.com"), async {
+    let alice_thread = with_crux_context(ctx("alice@example.com"), async {
         let thread = db.create_thread(alice, true).await.expect("alice thread");
-        afg_runtime::afg_monitor!(function = HANDLER_FN);
-        afg_runtime::afg_access!(node = THREADS_NODE, kind = afg_runtime::AccessKind::Write, function = HANDLER_FN, resource = format!("thread:{thread}"), count = 1u64);
+        crux_r4_runtime::crux_monitor!(function = HANDLER_FN);
+        crux_r4_runtime::crux_access!(node = THREADS_NODE, kind = crux_r4_runtime::AccessKind::Write, function = HANDLER_FN, resource = format!("thread:{thread}"), count = 1u64);
         db.create_thread_message(thread, "user", "ALICE-PRIVATE: quarterly numbers", None, None, None, false)
             .await
             .expect("alice message");
@@ -75,18 +75,18 @@ async fn main() {
     // convert_thread_to_page fetches the thread only to confirm existence, then calls
     // list_thread_messages with NO check_read_thread, and embeds the messages in a
     // page owned by the caller. Reproduce that exact read sequence as bob.
-    with_afg_context(ctx("bob@example.com"), async {
-        afg_runtime::afg_monitor!(function = HANDLER_FN);
+    with_crux_context(ctx("bob@example.com"), async {
+        crux_r4_runtime::crux_monitor!(function = HANDLER_FN);
         // convert_thread_to_page: `let _thread = self.thread.get(thread_id)...;`  (existence only)
         // convert_thread_to_page: `let thread_messages = self.thread.list_thread_messages(...)` (no check)
         let messages = db
             .list_thread_messages(alice_thread, None, None, false)
             .await
             .expect("conversion path reads alice's thread");
-        afg_runtime::afg_access!(node = THREADS_NODE, kind = afg_runtime::AccessKind::Read, function = HANDLER_FN, resource = format!("thread:{alice_thread}"), count = messages.len() as u64);
+        crux_r4_runtime::crux_access!(node = THREADS_NODE, kind = crux_r4_runtime::AccessKind::Read, function = HANDLER_FN, resource = format!("thread:{alice_thread}"), count = messages.len() as u64);
         for m in &messages {
             if m.content.contains("ALICE-PRIVATE") {
-                afg_runtime::afg_leak!(owner = "alice@example.com", detail = m.content.as_str());
+                crux_r4_runtime::crux_leak!(owner = "alice@example.com", detail = m.content.as_str());
                 println!(
                     "[conversion path] bob served alice's PRIVATE thread (no check_read_thread): {}",
                     m.content

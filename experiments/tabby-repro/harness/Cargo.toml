@@ -2,10 +2,10 @@
 # the tabby workspace as a member by scripts/03_dynamic.sh (tabby-db uses
 # `version.workspace = true`, so the harness must build inside that workspace).
 #
-# The tabby-db path is relative to tabby/afg_tabby_harness/ (where it is copied).
-# The afg_runtime path is absolute; adjust if AFG_ROOT differs from the default.
+# The tabby-db path is relative to tabby/crux_tabby_harness/ (where it is copied).
+# The crux_r4_runtime path is absolute; adjust if CRUX_ROOT differs from the default.
 [package]
-name = "afg_tabby_harness"
+name = "crux_tabby_harness"
 version = "0.0.0"
 edition = "2021"
 
@@ -13,4 +13,4 @@ edition = "2021"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tabby-db = { path = "../ee/tabby-db", features = ["testutils"] }
 tabby-schema = { path = "../ee/tabby-schema" }
-afg_runtime = { path = "$PATH-TO-YOUR/afg_prototype/afg_runtime" }
+crux_r4_runtime = { path = "$PATH-TO-YOUR/afg_prototype/crux_r4_runtime" }

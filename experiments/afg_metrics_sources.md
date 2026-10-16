@@ -1,4 +1,4 @@
-# AFG metrics table - source of every number
+# CRUX metrics table - source of every number
 
 Companion to `afg_metrics_table.tex`. Each cell traces to a measurement so the
 paper's numbers are reproducible. Measured 2026-09-22 unless noted.
@@ -32,12 +32,12 @@ LLM API calls (grep for openai/chat-completion in analyzed scope):
 ## Seeds / interleavings / performance
 - Only zed exposes a native seeded deterministic scheduler (gpui executor + SEED env), so seed/interleaving/timing sweeps are zed-only. tabby/bionic/appflowy were single two-user reproductions of the real app (one interleaving, `"seed":null` in their traces), no madsim/seed sweep.
 - zed sweeps (this session): sequential denied+core = 30 seeds each, byte-identical traces (1 effective interleaving each, structural). Concurrent race (3 members + 1 non-member) = 60 seeds -> 21 distinct auth-order interleavings; invariant held on 100% (0 seeds where non-member read node 7300); 0 leaks. 240 instrumented+baseline runs in ~244s. Per-seed wall (deterministic executor): denied 0.171s, core avg 0.192-0.193s, race avg 0.227s (instrumented) / 0.229s (baseline); overhead within noise.
-- "# seeds swept to first leak" = 1 for tabby and appflowy (deterministic leak, found on the first/only run; no seed sweep needed); n/a for bionic (true negative, no leak); 3 for zed (schedule-dependent join/removal race leak, first leaking seed is the 3rd). Interleavings were explored via each app native seeded executor, not AFG trace-rescheduler. The seed/schedule machinery demonstrates AFG can explore concurrent interleavings to both find a schedule-dependent leak (zed) and confirm a guard holds across them (zed join path, 21 interleavings).
+- "# seeds swept to first leak" = 1 for tabby and appflowy (deterministic leak, found on the first/only run; no seed sweep needed); n/a for bionic (true negative, no leak); 3 for zed (schedule-dependent join/removal race leak, first leaking seed is the 3rd). Interleavings were explored via each app native seeded executor, not CRUX trace-rescheduler. The seed/schedule machinery demonstrates CRUX can explore concurrent interleavings to both find a schedule-dependent leak (zed) and confirm a guard holds across them (zed join path, 21 interleavings).
 
 ## Performance timing (added 2026-09-22, "finish the table" pass)
 - tabby: measured directly. Rebuilt the release harness (rustc 1.85, in-memory
   SQLite, real tabby-db create_thread_message/list_thread_messages, two users) and
-  ran the binary 50x each mode. With instrumentation (AFG_TRACE_PATH set):
+  ran the binary 50x each mode. With instrumentation (CRUX_TRACE_PATH set):
   best 15.98 / avg 16.82 / worst 19.13 ms. Without (unset, probe no-op):
   best 16.07 / avg 17.27 / worst 19.60 ms. Overhead within run-to-run noise (the
   instrumented mean is actually lower). Process-level time = full 2-user scenario
@@ -47,7 +47,7 @@ LLM API calls (grep for openai/chat-completion in analyzed scope):
   instrumentation.patch + full docker stack (bionic: cornucopia typechecks vs a
   live DB at build; appflowy: whole compose with gotrue/redis/minio/postgres, and
   the LEAK is on the source build). A "run" is one two-user HTTP request sequence,
-  dominated by web-framework + DB latency, not AFG compute. The probe is the same
+  dominated by web-framework + DB latency, not CRUX compute. The probe is the same
   no-op-when-unset JSONL emitter as tabby's and zed's; its overhead (a few
   per-request file writes) is unmeasurable against HTTP latency and was measured
   negligible on tabby (in-process) and zed (executor). Filling exact ms would only

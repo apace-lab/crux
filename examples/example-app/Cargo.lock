@@ -3,16 +3,6 @@
 version = 4
 
 [[package]]
-name = "afg_runtime"
-version = "0.1.0"
-dependencies = [
- "madsim",
- "madsim-tokio",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -102,6 +92,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
+name = "crux_r4_runtime"
+version = "0.1.0"
+dependencies = [
+ "madsim",
+ "madsim-tokio",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "darling"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -182,7 +183,7 @@ dependencies = [
 name = "example-app"
 version = "0.1.0"
 dependencies = [
- "afg_runtime",
+ "crux_r4_runtime",
  "madsim",
  "madsim-tokio",
 ]

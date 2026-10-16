@@ -6,14 +6,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use afg_instrument::{
+use crux_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
-use afg_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
-use afg_scheduler::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
+use crux_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
+use crux_scheduler::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
 
 #[derive(Parser, Debug)]
-#[command(name = "afg")]
+#[command(name = "crux")]
 struct Cli {
     /// Application source dir (needed for the dynamic stages; unused with --static-only)
     #[arg(long, default_value = ".")]
@@ -40,9 +40,16 @@ struct Cli {
     #[arg(long, default_value = "../rail-rs/signatures/source_dao_functions.json")]
     source_dao: PathBuf,
 
-    /// Path to the afg_runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "afg_runtime")]
-    afg_runtime: PathBuf,
+    /// Serve-site capture catalog (JSON): at an auto-selected serve, iterates the
+    /// in-scope served rows and emits a resource-linked access per row capturing the
+    /// principal directly, for handlers that serve many rows (vaultwarden's
+    /// `_get_org_details`). Missing file means no rules.
+    #[arg(long, default_value = "../rail-rs/signatures/serve_capture_functions.json")]
+    serve_capture: PathBuf,
+
+    /// Path to the crux_runtime crate, added as a dependency to the instrumented app
+    #[arg(long, default_value = "crux_runtime")]
+    crux_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]
     run_dir: PathBuf,
@@ -77,6 +84,12 @@ struct Cli {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StaticStageResult {
     instrumentation_plan: InstrumentationPlan,
+    /// DWARF struct-field index (type name -> field names), recovered from the IR debug
+    /// info and threaded into the serve-capture inference so it can pick a served row's id
+    /// field and a principal type's id field by naming convention. Not persisted (it is a
+    /// large derived map rebuilt from the IR each run).
+    #[serde(skip, default)]
+    struct_fields: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Stable (deterministic across runs) numeric id for a function name, used as
@@ -89,7 +102,7 @@ fn hash_fn_id(name: &str) -> u64 {
 }
 
 /// Project-relative source location of a PANode, if it has debug info.
-fn node_loc(engine: &rail_rs::TaintAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
+fn node_loc(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>, node_id: usize) -> Option<(String, usize)> {
     let node = engine.nodes.get(&node_id)?;
     let loc = node.source_loc.as_ref()?;
     let file = loc.file.clone()?;
@@ -107,7 +120,7 @@ fn node_loc(engine: &rail_rs::TaintAnalysis<'_>, node_id: usize) -> Option<(Stri
 /// credential check. Password / secret verifiers such as argon2 and bcrypt take
 /// the secret as their first argument, not the user, so they are credential
 /// checks: the principal is established at a separate token / session / identity
-/// point. Only principal-establishing points get an `afg_auth!` site. Keying this
+/// point. Only principal-establishing points get an `crux_auth!` site. Keying this
 /// on the matched catalog function (which the taint analysis already resolved) is
 /// more reliable than inspecting the source line at instrument time.
 fn establishes_principal(matched_fn_name: &str, principal_from_return: bool) -> bool {
@@ -157,7 +170,7 @@ fn data_access_kind(category: &str) -> AccessKind {
 /// even though their per-callsite PANodes differ, which is what lets the
 /// write-then-read leak verdict link across them. Sites with no shared store
 /// pointee (e.g. a lone store) get no id and fall back to per-callsite behaviour.
-fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collections::HashMap<usize, u64> {
+fn compute_data_resource_ids(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>) -> std::collections::HashMap<usize, u64> {
     use std::collections::{BTreeSet, HashMap};
 
     // Per data-access site: the pointees its store arguments alias (tier 1), and
@@ -165,7 +178,7 @@ fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collec
     let mut site_pointees: Vec<(usize, BTreeSet<usize>)> = Vec::new();
     let mut site_handles: Vec<(usize, BTreeSet<usize>)> = Vec::new();
     for point in engine.semantic_points.iter() {
-        if !matches!(point.kind, rail_rs::taint_analysis::SemanticPointKind::DataAccess { .. }) {
+        if !matches!(point.kind, rail_rs::psa::SemanticPointKind::DataAccess { .. }) {
             continue;
         }
         let mut pts: BTreeSet<usize> = BTreeSet::new();
@@ -178,9 +191,9 @@ fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collec
                 }
             }
         }
-        if std::env::var_os("AFG_DEBUG_RESOURCE").is_some() {
+        if std::env::var_os("CRUX_DEBUG_RESOURCE").is_some() {
             eprintln!(
-                "[afg-resource] callsite {} pointees={:?} handles={:?}",
+                "[crux-resource] callsite {} pointees={:?} handles={:?}",
                 point.callsite_id, pts, handles
             );
         }
@@ -233,7 +246,7 @@ fn compute_data_resource_ids(engine: &rail_rs::TaintAnalysis<'_>) -> std::collec
 /// per-user principal is established) and `Access` sites at LLM calls and any
 /// statically-detected cross-user overlaps. The dynamic stages then distinguish
 /// users at runtime.
-fn run_pag_and_afg(
+fn run_pag_and_crux(
     llvm_ir: &[PathBuf],
     llm_api: &Path,
     ac: &Path,
@@ -241,7 +254,7 @@ fn run_pag_and_afg(
 ) -> Result<StaticStageResult> {
     use std::collections::HashSet;
 
-    println!("[1/6] PAG + AFG static analysis");
+    println!("[1/6] PAG + CRUX static analysis");
 
     // Parse the module(s) and set up the cross-module analysis.
     let mut modules = Vec::with_capacity(llvm_ir.len());
@@ -262,18 +275,18 @@ fn run_pag_and_afg(
         anyhow::anyhow!("failed to load data-store catalog {}: {e}", data_access.display())
     })?;
 
-    // AFG_INFER_CHECKS: derive application access-control checks structurally (a call whose
+    // CRUX_INFER_CHECKS: derive application access-control checks structurally (a call whose
     // boolean result controls a guard branch) and add them as synthetic authorization
     // signatures, so bespoke app checks (e.g. `is_accessible_to_user`) need not be cataloged
     // by hand. Opt-in and heuristic; see rail_rs::guard_inference.
-    // AFG_INFER_CHECKS: structurally derive candidate application access-control checks (calls
+    // CRUX_INFER_CHECKS: structurally derive candidate application access-control checks (calls
     // whose boolean result controls a guard branch). It has high recall (it surfaces the real
     // app checks, e.g. `is_accessible_to_user`), but over-approximates: it also proposes
     // operators and predicates, so using it to *clear* accesses is unsound (it can hide a real
     // leak). By default it therefore only SUGGESTS the catalog (prints the list for curation);
-    // set AFG_INFER_CHECKS=apply to actually add them (unsound, for experiments only).
-    if let Ok(mode) = std::env::var("AFG_INFER_CHECKS") {
-        let app = std::env::var("AFG_APP_CRATE")
+    // set CRUX_INFER_CHECKS=apply to actually add them (unsound, for experiments only).
+    if let Ok(mode) = std::env::var("CRUX_INFER_CHECKS") {
+        let app = std::env::var("CRUX_APP_CRATE")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| rail_rs::detect_app_crate(modules.iter()));
@@ -333,10 +346,13 @@ fn run_pag_and_afg(
         debug_types.composite_count(),
         debug_types.value_link_count()
     );
+    // Struct-field index for serve-capture inference (type name -> field names), built from
+    // the debug info before it is moved into the analysis.
+    let struct_fields = debug_types.struct_field_index();
     analysis.set_debug_types(debug_types);
 
-    // Build the PAG (afg mode) and run the taint analysis.
-    let engine = analysis.taint_analysis("afg", None);
+    // Build the PAG (crux mode) and run the taint analysis.
+    let engine = analysis.psa("crux", None);
     println!(
         "      taint analysis: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
         engine.app_crate,
@@ -345,15 +361,15 @@ fn run_pag_and_afg(
         engine.node_contexts.len()
     );
 
-    use rail_rs::taint_analysis::SemanticPointKind;
+    use rail_rs::psa::SemanticPointKind;
 
     // --- Access-control dominance analysis (automated enforcement pass) ---
     // Enumerate data-access sites not dominated, on all paths, by an access-control check
     // bound to the accessed resource (the leak candidates). Block-level dominance comes
     // from the per-function dominator trees; resource binding from the points-to sets.
-    // See rail_rs::dominance.
+    // See rail_rs::ace (the access-control enforcement pass).
     {
-        use rail_rs::dominance::{self, AccessSite, CallSite, CheckSite, DominanceFacts, PrecomputedOracle};
+        use rail_rs::ace::{self as dominance, AccessSite, CallSite, CheckSite, DominanceFacts, PrecomputedOracle};
         use rail_rs::CFGNode;
         use std::collections::{BTreeMap, BTreeSet};
 
@@ -363,8 +379,8 @@ fn run_pag_and_afg(
         // Propagate recovered debug types through the SSA dataflow so temporaries (the
         // actual resource pointers at real access sites, e.g. GEP results and spill loads)
         // carry a struct type, not just named source variables.
-        // AFG_NO_TYPE_GATE disables the debug-type gate (for A/B comparison on identical IR).
-        let type_gate_on = std::env::var("AFG_NO_TYPE_GATE").is_err();
+        // CRUX_NO_TYPE_GATE disables the debug-type gate (for A/B comparison on identical IR).
+        let type_gate_on = std::env::var("CRUX_NO_TYPE_GATE").is_err();
         let value_types = if type_gate_on {
             analysis.debug_types().map(|dt| dt.propagate_types(modules.iter()))
         } else {
@@ -428,7 +444,7 @@ fn run_pag_and_afg(
         };
 
         // Diagnostic: dump the resource nodes at the first few sites and whether each types.
-        if std::env::var("AFG_DEBUG_TYPETAG").is_ok() {
+        if std::env::var("CRUX_DEBUG_TYPETAG").is_ok() {
             if let Some(vt) = value_types.as_ref() {
                 eprintln!("[TYPETAG] propagate_types total typed values = {}", vt.len());
                 for (f, v, t) in vt.sample(8) {
@@ -488,7 +504,7 @@ fn run_pag_and_afg(
             }
             cur.to_string()
         };
-        let kind_key = |p: &rail_rs::taint_analysis::SemanticPoint| -> Option<&'static str> {
+        let kind_key = |p: &rail_rs::psa::SemanticPoint| -> Option<&'static str> {
             match &p.kind {
                 SemanticPointKind::AccessControl { .. }
                 | SemanticPointKind::AccessControlRecovery { .. } => Some("ac"),
@@ -504,7 +520,7 @@ fn run_pag_and_afg(
                 }
             }
         }
-        let is_redundant_body = |p: &rail_rs::taint_analysis::SemanticPoint| -> bool {
+        let is_redundant_body = |p: &rail_rs::psa::SemanticPoint| -> bool {
             match kind_key(p) {
                 Some(kk) => {
                     is_coroutine_body(&p.security_point.callee)
@@ -667,8 +683,8 @@ fn run_pag_and_afg(
                 // Coroutine-normalized dominance: for async fns this rewires the resume
                 // dispatch so a check before an `await` dominates a serve after it. Identical
                 // to the plain dominator tree for non-coroutine functions.
-                // AFG_NO_COROUTINE_DOM disables it (for A/B comparison on identical IR).
-                let dt = if std::env::var("AFG_NO_COROUTINE_DOM").is_ok() {
+                // CRUX_NO_COROUTINE_DOM disables it (for A/B comparison on identical IR).
+                let dt = if std::env::var("CRUX_NO_COROUTINE_DOM").is_ok() {
                     fa.dominator_tree()
                 } else {
                     fa.dominator_tree_coroutine()
@@ -676,7 +692,7 @@ fn run_pag_and_afg(
                 let name_of = |bs: &str| {
                     func.basic_blocks.iter().map(|bb| &bb.name).find(|n| n.to_string() == bs)
                 };
-                let dbg_dom = std::env::var("AFG_DEBUG_DOM").map(|v| cf.contains(&v)).unwrap_or(false);
+                let dbg_dom = std::env::var("CRUX_DEBUG_DOM").map(|v| cf.contains(&v)).unwrap_or(false);
                 for cb in &check_blocks {
                     for tb in &targets {
                         if let (Some(cn), Some(tn)) = (name_of(cb), name_of(tb)) {
@@ -732,7 +748,7 @@ fn run_pag_and_afg(
             SemanticPointKind::AccessControl { .. }
             | SemanticPointKind::AccessControlRecovery { .. } => {
                 let matched = &point.security_point.matched_fn_name;
-                // Only principal-establishing auth points get an afg_auth! site.
+                // Only principal-establishing auth points get an crux_auth! site.
                 // Credential checks (argon2/bcrypt password verifiers) authenticate
                 // but do not name the user, so the principal is established at a
                 // separate token / session / identity point.
@@ -884,6 +900,7 @@ fn run_pag_and_afg(
     );
     Ok(StaticStageResult {
         instrumentation_plan: InstrumentationPlan { sites },
+        struct_fields,
     })
 }
 
@@ -898,7 +915,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     prepare_run_dir(&cli.run_dir)?;
 
-    let static_result = run_pag_and_afg(&cli.llvm_ir, &cli.llm_api, &cli.ac, &cli.data_access)?;
+    let static_result = run_pag_and_crux(&cli.llvm_ir, &cli.llm_api, &cli.ac, &cli.data_access)?;
     fs::write(
         cli.run_dir.join("static/instrumentation.json"),
         serde_json::to_string_pretty(&static_result.instrumentation_plan)?,
@@ -917,22 +934,29 @@ fn main() -> Result<()> {
     let instrumented_project = cli.run_dir.join("instrumented/app");
     // SOURCE-level DAO capture rules (catalog-driven): recover per-instance
     // resources for ORM calls the IR erases via `#[async_trait]`. Absent file -> none.
-    let source_dao = afg_instrument::load_source_dao_rules(&cli.source_dao)
+    let source_dao = crux_instrument::load_source_dao_rules(&cli.source_dao)
         .with_context(|| format!("loading source-DAO catalog {}", cli.source_dao.display()))?;
     if !source_dao.is_empty() {
         println!("      source-DAO rules: {}", source_dao.len());
+    }
+    let serve_capture = crux_instrument::load_serve_capture_rules(&cli.serve_capture)
+        .with_context(|| format!("loading serve-capture catalog {}", cli.serve_capture.display()))?;
+    if !serve_capture.is_empty() {
+        println!("      serve-capture rules: {}", serve_capture.len());
     }
     instrument_project(
         &cli.project,
         &instrumented_project,
         &static_result.instrumentation_plan,
-        &cli.afg_runtime,
+        &cli.crux_runtime,
         &source_dao,
+        &serve_capture,
+        &static_result.struct_fields,
     )?;
 
     if cli.instrument_only {
         println!(
-            "instrument-only: wrote AFG-instrumented app to {}; run it yourself.",
+            "instrument-only: wrote CRUX-instrumented app to {}; run it yourself.",
             instrumented_project.display()
         );
         return Ok(());
@@ -1029,14 +1053,14 @@ fn main() -> Result<()> {
         println!("      replay disabled; add --replay to execute generated schedules");
     }
 
-    println!("AFG pipeline completed: {}", cli.run_dir.display());
+    println!("CRUX pipeline completed: {}", cli.run_dir.display());
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{data_access_kind, establishes_principal};
-    use afg_instrument::AccessKind;
+    use crux_instrument::AccessKind;
 
     #[test]
     fn data_access_direction_from_category() {

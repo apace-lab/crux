@@ -1,6 +1,6 @@
 # AFG madsim rescheduler on the controlled demo (demo_dynamic)
 
-This experiment runs AFG's own scheduler (`afg_scheduler`) with madsim replay, to show
+This experiment runs AFG's own scheduler (`afg_cuie`) with madsim replay, to show
 the rescheduler component end to end: it generates alternative interleavings and
 reproduces a cross-user leak by forcing a write-then-read order on the shared node.
 The four real-app targets (tabby, bionic, AppFlowy, zed) do not build under madsim, so
@@ -38,18 +38,18 @@ cd ../../../afg_prototype
 LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 ./target/debug/afg \
   --llvm-ir "../rail-rs/examples/demo_dynamic/$LL" \
   --project ../rail-rs/examples/demo_dynamic \
-  --afg-runtime "$PWD/afg_runtime" \
+  --afg-r4-runtime "$PWD/afg_r4_runtime" \
   --llm-api ../rail-rs/signatures/llm_api_functions.json \
   --ac ../rail-rs/signatures/ac_functions.json \
   --data-access ../rail-rs/signatures/data_access_functions.json \
   --run-dir /tmp/afg_dyn --cargo-cmd run --seeds 1 --replay
 ```
 
-The `[5/6] Generate schedules` stage calls `afg_scheduler::generate_schedules`, which
+The `[5/6] Generate schedules` stage calls `afg_cuie::generate_schedules`, which
 emits one candidate schedule (an ordered list of `{principal, site}` steps) per shared
 PANode. The `[6/6] Replay` stage re-runs the instrumented app under madsim once per
 schedule with `AFG_SCHEDULE_PATH` set (which forces that order via the
-`afg_schedule_point!` gate), then `afg_scheduler::verify_replay` decides whether a
+`afg_schedule_point!` gate), then `afg_cuie::verify_replay` decides whether a
 non-owner read of a node its owner wrote actually occurred.
 
 ## What we found
@@ -83,7 +83,7 @@ Metrics (AFG rescheduler, this demo):
 
 Prerequisites: rustc 1.85, LLVM 19 at `/opt/homebrew/opt/llvm@19`, the `afg` producer
 built (`LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin afg`), and the
-demo's `afg_runtime` dependency pointing at `afg_prototype/afg_runtime`. Then run the
+demo's `afg_r4_runtime` dependency pointing at `afg_prototype/afg_r4_runtime`. Then run the
 two commands above. To re-time one replay:
 
 ```sh
