@@ -4,7 +4,7 @@ pub struct Resource {
 }
 
 // Cataloged as a data-access; the static stage flags its call site and the
-// auto-instrumenter injects an afg_access! probe there (no hand placement).
+// auto-instrumenter injects an crux_access! probe there (no hand placement).
 #[inline(never)]
 pub fn db_read(r: &Resource) -> u64 {
     std::hint::black_box(r).data

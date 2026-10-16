@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CRUX dashboard</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#2a3240;
+    --text:#e6edf3; --muted:#8b949e; --accent:#a371f7; --ok:#3fb950; --leak:#f85149;
+    --alice:#58a6ff; --bob:#f0a35e;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  code, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { padding:14px 20px; border-bottom:1px solid var(--border); background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:16px; }
+  header .sub { color:var(--muted); font-size:12px; }
+  header .sp { margin-left:auto; }
+  header button { background:transparent; border:1px solid var(--border); color:var(--text); border-radius:7px; padding:7px 12px; font-size:12px; cursor:pointer; }
+  .wrap { padding:18px 20px; max-width:1200px; margin:0 auto; }
+  .status { padding:12px 14px; border-radius:10px; font-weight:700; margin-bottom:16px; border:1px solid var(--border); }
+  .status.clear { color:var(--ok); background:#3fb95012; }
+  .status.alert { color:var(--leak); background:#f8514912; }
+  .explain { color:var(--muted); font-size:12px; margin:-8px 0 10px; line-height:1.55; }
+  .explain b { color:var(--text); }
+  .stats { color:var(--muted); font-size:12px; margin-bottom:14px; }
+  .stats b { color:var(--text); }
+  .grid { display:grid; grid-template-columns:1.4fr 1fr; gap:16px; }
+  @media (max-width:900px){ .grid { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  .card h2 { margin:0; padding:10px 14px; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); border-bottom:1px solid var(--border); }
+  .card .body { padding:10px 14px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel); }
+  .scroll { max-height:320px; overflow:auto; }
+  .p-alice { color:var(--alice); font-weight:700; }
+  .p-bob { color:var(--bob); font-weight:700; }
+  .p-other { color:var(--accent); font-weight:700; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; border:1px solid var(--border); margin:0 6px 6px 0; }
+  .empty { color:var(--muted); font-size:12px; }
+  .kv { font-size:12px; color:var(--muted); }
+  .leak-item { color:var(--leak); font-size:13px; padding:4px 0; }
+  .verdict-yes { color:var(--leak); font-weight:700; }
+  .verdict-no { color:var(--muted); }
+  pre.raw { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; font-size:11px; max-height:280px; overflow:auto; color:var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>CRUX dashboard</h1>
+    <span class="sub">analyze_traces + generate_schedules</span>
+    <span class="sp"></span>
+    <span class="kv" id="source"></span>
+    <button id="rawBtn">Toggle raw JSON</button>
+  </header>
+  <div class="wrap">
+    <div class="status clear" id="status">&#10003; No cross-user overlap yet</div>
+    <div class="explain">
+      <b>Overlap</b> = two principals reached the same shared access node (the cross-user risk CRUX flags).
+      <b>Leak</b> = a principal was actually served another's data (a write-then-read node overlap, or an app-reported leak event).
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="grid">
+      <div class="card">
+        <h2>Trace events (verbose)</h2>
+        <div class="body scroll">
+          <table id="events"><thead><tr>
+            <th>seq</th><th>event</th><th>principal</th><th>node</th><th>site</th><th>function_id</th><th>file:line</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Principals</h2>
+          <div class="body" id="principals"><span class="empty">none</span></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Per-principal scope (why the overlap)</h2>
+          <div class="body" id="scopes"><span class="empty">none</span></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Cross-user overlaps</h2>
+          <div class="body" id="overlaps"><span class="empty">none</span></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Schedules</h2>
+          <div class="body mono" id="schedules"><span class="empty">none</span></div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Replay verdicts</h2>
+          <div class="body" id="verdicts"><span class="empty">none (run with a --run-dir that has replay results)</span></div>
+        </div>
+        <div class="card">
+          <h2>Leaks (app-reported)</h2>
+          <div class="body" id="leaks"><span class="empty">none</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card" id="rawCard" style="margin-top:16px; display:none;">
+      <h2>Raw /crux response</h2>
+      <div class="body"><pre class="raw" id="raw"></pre></div>
+    </div>
+  </div>
+
+<script>
+function pcls(p) {
+  if (p && p.startsWith("alice")) return "p-alice";
+  if (p && p.startsWith("bob")) return "p-bob";
+  return "p-other";
+}
+function who(p) { return `<span class="${pcls(p)}">${p}</span>`; }
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/crux")).json(); } catch (e) { return; }
+
+  document.getElementById("source").textContent = s.source || "";
+
+  const st = document.getElementById("status");
+  if (s.overlaps && s.overlaps.length) {
+    const o = s.overlaps[0];
+    st.className = "status alert";
+    st.innerHTML = `&#9888; CROSS-USER OVERLAP DETECTED: ${who(o.left)} &#8596; ${who(o.right)} share PANode ${(o.shared_nodes||[]).join(", ")}`;
+  } else {
+    st.className = "status clear";
+    st.innerHTML = "&#10003; No cross-user overlap yet";
+  }
+
+  const tb = document.querySelector("#events tbody");
+  tb.innerHTML = (s.events||[]).map(e => `<tr>
+    <td>${e.seq}</td><td>${e.kind}</td><td>${who(e.principal)}</td>
+    <td>${e.node ?? ""}</td><td>${e.site ?? ""}</td><td>${e.function_id ?? ""}</td>
+    <td class="mono">${e.file ? (e.file.split("/").pop() + ":" + (e.line ?? "")) : ""}</td>
+  </tr>`).join("") || '<tr><td colspan="7" class="empty">no events yet</td></tr>';
+
+  document.getElementById("principals").innerHTML =
+    (s.principals && s.principals.length) ? s.principals.map(p => `<span class="pill">${p}</span>`).join("") : '<span class="empty">none</span>';
+
+  const sc = s.scopes || {};
+  const sk = Object.keys(sc);
+  document.getElementById("scopes").innerHTML = sk.length
+    ? sk.map(p => {
+        const v = sc[p] || {};
+        const r = (v.read_nodes||[]).join(", ");
+        const w = (v.write_nodes||[]).join(", ");
+        const f = (v.functions||[]).length;
+        return `<div style="margin-bottom:8px">${who(p)}<br><span class="kv">reads [${r}] &middot; writes [${w}] &middot; ${f} fn(s)</span></div>`;
+      }).join("")
+    : '<span class="empty">none</span>';
+
+  const nEv=(s.events||[]).length, nP=(s.principals||[]).length, nO=(s.overlaps||[]).length,
+        nL=(s.leaks||[]).length, nV=(s.verdicts||[]).filter(v=>v.verdict==="reproduced").length;
+  document.getElementById("stats").innerHTML =
+    `<b>${nEv}</b> events &middot; <b>${nP}</b> principals &middot; <b>${nO}</b> overlap(s) &middot; <b>${nL}</b> leak(s) &middot; <b>${nV}</b> reproduced`;
+
+  document.getElementById("overlaps").innerHTML =
+    (s.overlaps && s.overlaps.length)
+      ? s.overlaps.map(o => `${who(o.left)} &#8596; ${who(o.right)} &middot; nodes [${(o.shared_nodes||[]).join(", ")}]`).join("<br>")
+      : '<span class="empty">none</span>';
+
+  document.getElementById("schedules").innerHTML =
+    (s.schedules && s.schedules.length)
+      ? s.schedules.map(pl => `PANode ${pl.panode}: ` + (pl.steps||[]).map(st => `${who(st.principal)}@${st.site}`).join(" &rarr; ")).join("<br>")
+      : '<span class="empty">none</span>';
+
+  const vd = s.verdicts || [];
+  document.getElementById("verdicts").innerHTML = vd.length
+    ? vd.map(v => v.verdict === "reproduced"
+        ? `<div class="verdict-yes">&#9888; LEAK REPRODUCED: ${who(v.writer)} wrote PANode ${v.panode}, then ${who(v.reader)} read it</div>`
+        : `<div class="verdict-no">not reproduced: ${v.reason || ""}</div>`).join("")
+    : '<span class="empty">none (run with a --run-dir that has replay results)</span>';
+
+  document.getElementById("leaks").innerHTML =
+    (s.leaks && s.leaks.length)
+      ? s.leaks.map(l => `<div class="leak-item">&#9888; ${who(l.reader)} was served ${who(l.owner)}'s data &middot; <span class="kv">${l.detail}</span></div>`).join("")
+      : '<span class="empty">none (apps opt in via crux_leak!)</span>';
+
+  document.getElementById("raw").textContent = JSON.stringify(s, null, 2);
+}
+
+document.getElementById("rawBtn").addEventListener("click", () => {
+  const c = document.getElementById("rawCard");
+  c.style.display = c.style.display === "none" ? "block" : "none";
+});
+
+refresh();
+setInterval(refresh, 800);
+</script>
+</body>
+</html>

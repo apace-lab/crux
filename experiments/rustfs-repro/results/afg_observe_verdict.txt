@@ -1,0 +1,13 @@
+principals: 2
+  userakey0001: read_nodes={} write_nodes={9801}
+  userbkey0001: read_nodes={9801} write_nodes={}
+
+coarse PANode overlaps (static-style signal): 1
+  userakey0001 <-> userbkey0001 on nodes {9801}
+
+resource-linked leak verdict: 1 confirmed leak(s)
+  LEAK: userbkey0001 read userakey0001's object:bucketa/secret.txt (node 9801) and was served 1 row(s)
+
+access-then-access findings: 1 total (1 confidentiality / write-then-read, 0 integrity)
+  write-then-read [confidentiality]: userbkey0001 -> userakey0001 on object:bucketa/secret.txt (node 9801), served 1 row(s)
+  no integrity (write-then-write / read-then-write) hazards in this trace

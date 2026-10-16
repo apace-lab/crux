@@ -1,0 +1,16 @@
+[package]
+name = "crux_r4_runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+madsim = "=0.2.31"
+tokio = { version = "=0.2.30", package = "madsim-tokio", features = ["rt", "sync", "macros", "time"] }
+# Real tokio, used ONLY to read the current task id for the per-task principal
+# fallback (`current_task_key`). The madsim-tokio shim aliased as `tokio` above does
+# not expose `task::try_id`; under a non-madsim build this resolves to the same real
+# tokio crate the shim re-exports (no duplicate). Under `--cfg madsim` it is unused
+# (the scheduler path establishes a scope instead of using the task-id map).
+tokio_real = { version = "1", package = "tokio", features = ["rt"] }

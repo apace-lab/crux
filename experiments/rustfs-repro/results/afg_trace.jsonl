@@ -1,0 +1,2 @@
+{"event":"access","seq":1,"principal":"userakey0001","node":9801,"kind":"Write","resource":"object:bucketa/secret.txt","count":0}
+{"event":"access","seq":2,"principal":"userbkey0001","node":9801,"kind":"Read","resource":"object:bucketa/secret.txt","count":1}

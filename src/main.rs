@@ -6,14 +6,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use afg_r4_instrument::{
+use crux_r4_instrument::{
     instrument_project, AccessKind, InstrumentSite, InstrumentationPlan, SiteAction,
 };
-use afg_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
-use afg_cuie::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
+use crux_observe::{analyze_traces, run_observation, ObservationConfig, ObservationResult};
+use crux_cuie::{generate_schedules, verify_replay, write_schedule, LeakVerdict};
 
 #[derive(Parser, Debug)]
-#[command(name = "afg")]
+#[command(name = "crux")]
 struct Cli {
     /// Application source dir (needed for the dynamic stages; unused with --static-only)
     #[arg(long, default_value = ".")]
@@ -47,9 +47,9 @@ struct Cli {
     #[arg(long, default_value = "../rail-rs/signatures/serve_capture_functions.json")]
     serve_capture: PathBuf,
 
-    /// Path to the afg_r4_runtime crate, added as a dependency to the instrumented app
-    #[arg(long, default_value = "afg_r4_runtime")]
-    afg_r4_runtime: PathBuf,
+    /// Path to the crux_r4_runtime crate, added as a dependency to the instrumented app
+    #[arg(long, default_value = "crux_r4_runtime")]
+    crux_r4_runtime: PathBuf,
 
     #[arg(long, default_value = "runs/latest")]
     run_dir: PathBuf,
@@ -120,7 +120,7 @@ fn node_loc(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>, node_id: usize) ->
 /// credential check. Password / secret verifiers such as argon2 and bcrypt take
 /// the secret as their first argument, not the user, so they are credential
 /// checks: the principal is established at a separate token / session / identity
-/// point. Only principal-establishing points get an `afg_auth!` site. Keying this
+/// point. Only principal-establishing points get an `crux_auth!` site. Keying this
 /// on the matched catalog function (which the taint analysis already resolved) is
 /// more reliable than inspecting the source line at instrument time.
 fn establishes_principal(matched_fn_name: &str, principal_from_return: bool) -> bool {
@@ -191,9 +191,9 @@ fn compute_data_resource_ids(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>) -
                 }
             }
         }
-        if std::env::var_os("AFG_DEBUG_RESOURCE").is_some() {
+        if std::env::var_os("CRUX_DEBUG_RESOURCE").is_some() {
             eprintln!(
-                "[afg-resource] callsite {} pointees={:?} handles={:?}",
+                "[crux-resource] callsite {} pointees={:?} handles={:?}",
                 point.callsite_id, pts, handles
             );
         }
@@ -246,7 +246,7 @@ fn compute_data_resource_ids(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>) -
 /// per-user principal is established) and `Access` sites at LLM calls and any
 /// statically-detected cross-user overlaps. The dynamic stages then distinguish
 /// users at runtime.
-fn run_pag_and_afg(
+fn run_pag_and_crux(
     llvm_ir: &[PathBuf],
     llm_api: &Path,
     ac: &Path,
@@ -254,7 +254,7 @@ fn run_pag_and_afg(
 ) -> Result<StaticStageResult> {
     use std::collections::HashSet;
 
-    println!("[1/6] PAG + AFG static analysis");
+    println!("[1/6] PAG + CRUX static analysis");
 
     // Parse the module(s) and set up the cross-module analysis.
     let mut modules = Vec::with_capacity(llvm_ir.len());
@@ -275,18 +275,18 @@ fn run_pag_and_afg(
         anyhow::anyhow!("failed to load data-store catalog {}: {e}", data_access.display())
     })?;
 
-    // AFG_INFER_CHECKS: derive application access-control checks structurally (a call whose
+    // CRUX_INFER_CHECKS: derive application access-control checks structurally (a call whose
     // boolean result controls a guard branch) and add them as synthetic authorization
     // signatures, so bespoke app checks (e.g. `is_accessible_to_user`) need not be cataloged
     // by hand. Opt-in and heuristic; see rail_rs::guard_inference.
-    // AFG_INFER_CHECKS: structurally derive candidate application access-control checks (calls
+    // CRUX_INFER_CHECKS: structurally derive candidate application access-control checks (calls
     // whose boolean result controls a guard branch). It has high recall (it surfaces the real
     // app checks, e.g. `is_accessible_to_user`), but over-approximates: it also proposes
     // operators and predicates, so using it to *clear* accesses is unsound (it can hide a real
     // leak). By default it therefore only SUGGESTS the catalog (prints the list for curation);
-    // set AFG_INFER_CHECKS=apply to actually add them (unsound, for experiments only).
-    if let Ok(mode) = std::env::var("AFG_INFER_CHECKS") {
-        let app = std::env::var("AFG_APP_CRATE")
+    // set CRUX_INFER_CHECKS=apply to actually add them (unsound, for experiments only).
+    if let Ok(mode) = std::env::var("CRUX_INFER_CHECKS") {
+        let app = std::env::var("CRUX_APP_CRATE")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| rail_rs::detect_app_crate(modules.iter()));
@@ -351,8 +351,8 @@ fn run_pag_and_afg(
     let struct_fields = debug_types.struct_field_index();
     analysis.set_debug_types(debug_types);
 
-    // Build the PAG (afg mode) and run the taint analysis.
-    let engine = analysis.psa("afg", None);
+    // Build the PAG (crux mode) and run the taint analysis.
+    let engine = analysis.psa("crux", None);
     println!(
         "      taint analysis: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
         engine.app_crate,
@@ -379,8 +379,8 @@ fn run_pag_and_afg(
         // Propagate recovered debug types through the SSA dataflow so temporaries (the
         // actual resource pointers at real access sites, e.g. GEP results and spill loads)
         // carry a struct type, not just named source variables.
-        // AFG_NO_TYPE_GATE disables the debug-type gate (for A/B comparison on identical IR).
-        let type_gate_on = std::env::var("AFG_NO_TYPE_GATE").is_err();
+        // CRUX_NO_TYPE_GATE disables the debug-type gate (for A/B comparison on identical IR).
+        let type_gate_on = std::env::var("CRUX_NO_TYPE_GATE").is_err();
         let value_types = if type_gate_on {
             analysis.debug_types().map(|dt| dt.propagate_types(modules.iter()))
         } else {
@@ -444,7 +444,7 @@ fn run_pag_and_afg(
         };
 
         // Diagnostic: dump the resource nodes at the first few sites and whether each types.
-        if std::env::var("AFG_DEBUG_TYPETAG").is_ok() {
+        if std::env::var("CRUX_DEBUG_TYPETAG").is_ok() {
             if let Some(vt) = value_types.as_ref() {
                 eprintln!("[TYPETAG] propagate_types total typed values = {}", vt.len());
                 for (f, v, t) in vt.sample(8) {
@@ -683,8 +683,8 @@ fn run_pag_and_afg(
                 // Coroutine-normalized dominance: for async fns this rewires the resume
                 // dispatch so a check before an `await` dominates a serve after it. Identical
                 // to the plain dominator tree for non-coroutine functions.
-                // AFG_NO_COROUTINE_DOM disables it (for A/B comparison on identical IR).
-                let dt = if std::env::var("AFG_NO_COROUTINE_DOM").is_ok() {
+                // CRUX_NO_COROUTINE_DOM disables it (for A/B comparison on identical IR).
+                let dt = if std::env::var("CRUX_NO_COROUTINE_DOM").is_ok() {
                     fa.dominator_tree()
                 } else {
                     fa.dominator_tree_coroutine()
@@ -692,7 +692,7 @@ fn run_pag_and_afg(
                 let name_of = |bs: &str| {
                     func.basic_blocks.iter().map(|bb| &bb.name).find(|n| n.to_string() == bs)
                 };
-                let dbg_dom = std::env::var("AFG_DEBUG_DOM").map(|v| cf.contains(&v)).unwrap_or(false);
+                let dbg_dom = std::env::var("CRUX_DEBUG_DOM").map(|v| cf.contains(&v)).unwrap_or(false);
                 for cb in &check_blocks {
                     for tb in &targets {
                         if let (Some(cn), Some(tn)) = (name_of(cb), name_of(tb)) {
@@ -748,7 +748,7 @@ fn run_pag_and_afg(
             SemanticPointKind::AccessControl { .. }
             | SemanticPointKind::AccessControlRecovery { .. } => {
                 let matched = &point.security_point.matched_fn_name;
-                // Only principal-establishing auth points get an afg_auth! site.
+                // Only principal-establishing auth points get an crux_auth! site.
                 // Credential checks (argon2/bcrypt password verifiers) authenticate
                 // but do not name the user, so the principal is established at a
                 // separate token / session / identity point.
@@ -915,7 +915,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     prepare_run_dir(&cli.run_dir)?;
 
-    let static_result = run_pag_and_afg(&cli.llvm_ir, &cli.llm_api, &cli.ac, &cli.data_access)?;
+    let static_result = run_pag_and_crux(&cli.llvm_ir, &cli.llm_api, &cli.ac, &cli.data_access)?;
     fs::write(
         cli.run_dir.join("static/instrumentation.json"),
         serde_json::to_string_pretty(&static_result.instrumentation_plan)?,
@@ -934,12 +934,12 @@ fn main() -> Result<()> {
     let instrumented_project = cli.run_dir.join("instrumented/app");
     // SOURCE-level DAO capture rules (catalog-driven): recover per-instance
     // resources for ORM calls the IR erases via `#[async_trait]`. Absent file -> none.
-    let source_dao = afg_r4_instrument::load_source_dao_rules(&cli.source_dao)
+    let source_dao = crux_r4_instrument::load_source_dao_rules(&cli.source_dao)
         .with_context(|| format!("loading source-DAO catalog {}", cli.source_dao.display()))?;
     if !source_dao.is_empty() {
         println!("      source-DAO rules: {}", source_dao.len());
     }
-    let serve_capture = afg_r4_instrument::load_serve_capture_rules(&cli.serve_capture)
+    let serve_capture = crux_r4_instrument::load_serve_capture_rules(&cli.serve_capture)
         .with_context(|| format!("loading serve-capture catalog {}", cli.serve_capture.display()))?;
     if !serve_capture.is_empty() {
         println!("      serve-capture rules: {}", serve_capture.len());
@@ -948,7 +948,7 @@ fn main() -> Result<()> {
         &cli.project,
         &instrumented_project,
         &static_result.instrumentation_plan,
-        &cli.afg_r4_runtime,
+        &cli.crux_r4_runtime,
         &source_dao,
         &serve_capture,
         &static_result.struct_fields,
@@ -956,7 +956,7 @@ fn main() -> Result<()> {
 
     if cli.instrument_only {
         println!(
-            "instrument-only: wrote AFG-instrumented app to {}; run it yourself.",
+            "instrument-only: wrote CRUX-instrumented app to {}; run it yourself.",
             instrumented_project.display()
         );
         return Ok(());
@@ -1053,14 +1053,14 @@ fn main() -> Result<()> {
         println!("      replay disabled; add --replay to execute generated schedules");
     }
 
-    println!("AFG pipeline completed: {}", cli.run_dir.display());
+    println!("CRUX pipeline completed: {}", cli.run_dir.display());
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{data_access_kind, establishes_principal};
-    use afg_r4_instrument::AccessKind;
+    use crux_r4_instrument::AccessKind;
 
     #[test]
     fn data_access_direction_from_category() {

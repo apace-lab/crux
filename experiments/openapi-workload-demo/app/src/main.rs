@@ -1,6 +1,6 @@
 // A tiny multi-user notes service that ships an OpenAPI spec (via utoipa). It has a
 // deliberate IDOR cross-user leak: GET /notes/{id} returns any note regardless of owner,
-// while GET /notes/{id}/owned enforces ownership. The afg_workload driver reads the spec,
+// while GET /notes/{id}/owned enforces ownership. The crux_workload driver reads the spec,
 // drives two users, and replays user A's created id under user B to find the leak.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use utoipa::OpenApi;
 
-// Emit an AFG resource-linked access event (the same JSONL format afg_runtime produces and
-// afg_observe consumes). In a tokio app, afg_instrument + afg_runtime inject these
+// Emit an CRUX resource-linked access event (the same JSONL format crux_r4_runtime produces and
+// crux_observe consumes). In a tokio app, crux_r4_instrument + crux_r4_runtime inject these
 // automatically with the task-local principal; this sync server emits them directly, tagging
 // the principal from the request. `count` is the rows served (0 = denied/empty = dominated).
 static SEQ: AtomicU64 = AtomicU64::new(1);
-fn afg_access(principal: &str, kind: &str, resource: &str, count: u64) {
-    let Some(path) = std::env::var_os("AFG_TRACE_PATH") else { return };
+fn crux_access(principal: &str, kind: &str, resource: &str, count: u64) {
+    let Some(path) = std::env::var_os("CRUX_TRACE_PATH") else { return };
     let seq = SEQ.fetch_add(1, Ordering::SeqCst);
     let line = serde_json::json!({
         "event": "access", "seq": seq, "principal": principal,
@@ -110,7 +110,7 @@ fn route(
                 id,
                 Note { id, owner: user.to_string(), text: c.text },
             );
-            afg_access(user, "Write", &format!("note:{id}"), 1);
+            crux_access(user, "Write", &format!("note:{id}"), 1);
             (200, serde_json::to_string(&CreatedId { id }).unwrap())
         }
         ("GET", p) if p.starts_with("/notes/") && p.ends_with("/owned") => {
@@ -118,11 +118,11 @@ fn route(
             match store.lock().unwrap().get(&id) {
                 // SAFE: ownership enforced. Served -> count 1; denied -> count 0 (dominated).
                 Some(n) if n.owner == user => {
-                    afg_access(user, "Read", &format!("note:{id}"), 1);
+                    crux_access(user, "Read", &format!("note:{id}"), 1);
                     (200, serde_json::to_string(n).unwrap())
                 }
                 Some(_) => {
-                    afg_access(user, "Read", &format!("note:{id}"), 0);
+                    crux_access(user, "Read", &format!("note:{id}"), 0);
                     (403, "forbidden".into())
                 }
                 None => (404, "not found".into()),
@@ -133,7 +133,7 @@ fn route(
             match store.lock().unwrap().get(&id) {
                 // VULNERABLE: no ownership check (IDOR cross-user leak). Always serves -> count 1.
                 Some(n) => {
-                    afg_access(user, "Read", &format!("note:{id}"), 1);
+                    crux_access(user, "Read", &format!("note:{id}"), 1);
                     (200, serde_json::to_string(n).unwrap())
                 }
                 None => (404, "not found".into()),
