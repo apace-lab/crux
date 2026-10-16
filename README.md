@@ -1,4 +1,4 @@
-# CRUX - Access Flow Guard
+# CRUX - Cross-User Interleaving Examination
 
 CRUX detects and reproduces **cross-user data leaks** in async Rust services: cases
 where one principal's request can read data written by another principal
