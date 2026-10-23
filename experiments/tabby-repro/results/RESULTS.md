@@ -55,7 +55,7 @@ it uses the real `AccessPolicy::check_read_thread` (the guard) and the real
 
 So the same read is dominated by the ownership check on the resolver path (bob
 refused) but not on the conversion path (bob served) -- the un-dominated path is the
-bug. AFG trace (trace.jsonl):
+bug. CRUX trace (trace.jsonl):
 
 ```
 access  alice@example.com  node 7000  Write  thread:1  count 1
@@ -63,7 +63,7 @@ access  bob@example.com    node 7000  Read   thread:1  count 1
 leak    bob@example.com    owner alice@example.com
 ```
 
-`afg_observe` (resource-linked, same as bionic/appflowy/zed):
+`crux_observe` (resource-linked, same as bionic/appflowy/zed):
 
 ```
 coarse PANode overlaps: 1   alice <-> bob on nodes {7000}
@@ -77,7 +77,7 @@ persisted thread, which is why it was ambiguous. This corrected demo uses an
 ephemeral (unambiguously private) thread and drives it through the unguarded
 conversion path, so the leak is real and end-to-end through tabby's own policy code.
 
-## Real tabby vs AFG scaffolding
+## Real tabby vs CRUX scaffolding
 
 Real tabby: the schema and 49 migrations, `DbConn::new_in_memory`, `create_user`,
 `create_thread`, `create_thread_message`, `list_thread_messages`, the unscoped
@@ -85,7 +85,7 @@ query, AND `tabby_schema::policy::AccessPolicy::check_read_thread` (the real
 ownership guard), and the leak. The corrected harness reproduces the exact read
 sequence of `convert_thread_to_page` (existence check, then `list_thread_messages`
 with no `check_read_thread`) rather than driving the DB blind. Hand-added: the
-per-request `with_afg_context` wrap and node id 7000 standing for the shared
+per-request `with_crux_context` wrap and node id 7000 standing for the shared
 `thread_messages` table. Not run: the LLM page generation that follows the read
 (irrelevant to the access-control leak; the data is exfiltrated at the read).
 

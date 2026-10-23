@@ -17,7 +17,7 @@
 //     private thread.
 // It does not run the LLM page generation that follows the read; the data is already
 // exfiltrated at the read, which is what the CRUX probe records.
-use crux_r4_runtime::{with_crux_context, CruxContext};
+use crux_runtime::{with_crux_context, CruxContext};
 use tabby_db::DbConn;
 use tabby_schema::policy::AccessPolicy;
 use tabby_schema::AsID;
@@ -50,8 +50,8 @@ async fn main() {
     // refuse non-owners. This is the data-WRITE to the shared thread store.
     let alice_thread = with_crux_context(ctx("alice@example.com"), async {
         let thread = db.create_thread(alice, true).await.expect("alice thread");
-        crux_r4_runtime::crux_monitor!(function = HANDLER_FN);
-        crux_r4_runtime::crux_access!(node = THREADS_NODE, kind = crux_r4_runtime::AccessKind::Write, function = HANDLER_FN, resource = format!("thread:{thread}"), count = 1u64);
+        crux_runtime::crux_monitor!(function = HANDLER_FN);
+        crux_runtime::crux_access!(node = THREADS_NODE, kind = crux_runtime::AccessKind::Write, function = HANDLER_FN, resource = format!("thread:{thread}"), count = 1u64);
         db.create_thread_message(thread, "user", "ALICE-PRIVATE: quarterly numbers", None, None, None, false)
             .await
             .expect("alice message");
@@ -76,17 +76,17 @@ async fn main() {
     // list_thread_messages with NO check_read_thread, and embeds the messages in a
     // page owned by the caller. Reproduce that exact read sequence as bob.
     with_crux_context(ctx("bob@example.com"), async {
-        crux_r4_runtime::crux_monitor!(function = HANDLER_FN);
+        crux_runtime::crux_monitor!(function = HANDLER_FN);
         // convert_thread_to_page: `let _thread = self.thread.get(thread_id)...;`  (existence only)
         // convert_thread_to_page: `let thread_messages = self.thread.list_thread_messages(...)` (no check)
         let messages = db
             .list_thread_messages(alice_thread, None, None, false)
             .await
             .expect("conversion path reads alice's thread");
-        crux_r4_runtime::crux_access!(node = THREADS_NODE, kind = crux_r4_runtime::AccessKind::Read, function = HANDLER_FN, resource = format!("thread:{alice_thread}"), count = messages.len() as u64);
+        crux_runtime::crux_access!(node = THREADS_NODE, kind = crux_runtime::AccessKind::Read, function = HANDLER_FN, resource = format!("thread:{alice_thread}"), count = messages.len() as u64);
         for m in &messages {
             if m.content.contains("ALICE-PRIVATE") {
-                crux_r4_runtime::crux_leak!(owner = "alice@example.com", detail = m.content.as_str());
+                crux_runtime::crux_leak!(owner = "alice@example.com", detail = m.content.as_str());
                 println!(
                     "[conversion path] bob served alice's PRIVATE thread (no check_read_thread): {}",
                     m.content

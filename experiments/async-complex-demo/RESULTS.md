@@ -79,12 +79,12 @@ cd experiments/async-complex-demo
 rustc +1.86.0 --edition 2021 --crate-type bin --emit=llvm-ir \
   -C opt-level=0 -C debuginfo=2 -C codegen-units=1 complex.rs -o complex_dbg.ll
 cd ../../
-LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 AFG_APP_CRATE=complex ./target/release/afg \
+LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=complex ./target/release/afg \
   --llvm-ir experiments/async-complex-demo/complex_dbg.ll \
   --ac experiments/async-complex-demo/demo_ac.json \
   --data-access experiments/async-complex-demo/demo_data.json \
   --llm-api experiments/async-complex-demo/demo_llm.json --static-only
-# AFG_NO_COROUTINE_DOM=1 disables coroutine dominance for the A/B.
+# CRUX_NO_COROUTINE_DOM=1 disables coroutine dominance for the A/B.
 ```
 
 Unit coverage: `rail-rs` `debuginfo::tests::recovers_coroutine_capture_identity` (the captured

@@ -50,4 +50,4 @@ Expected: alice reads her own document; bob is refused on both paths.
 
 The interesting case is in the source, not this image. Source commit `c5bcfd3` is
 older and its batch path does not enforce anything. dynamic.md builds that source,
-instruments it, and shows AFG catch the leak the batch path actually has.
+instruments it, and shows CRUX catch the leak the batch path actually has.

@@ -1,13 +1,13 @@
-# AFG madsim rescheduler on the controlled demo (demo_dynamic)
+# CRUX madsim rescheduler on the controlled demo (demo_dynamic)
 
-This experiment runs AFG's own scheduler (`afg_cuie`) with madsim replay, to show
+This experiment runs CRUX's own scheduler (`crux_scheduler`) with madsim replay, to show
 the rescheduler component end to end: it generates alternative interleavings and
 reproduces a cross-user leak by forcing a write-then-read order on the shared node.
 The four real-app targets (tabby, bionic, AppFlowy, zed) do not build under madsim, so
 their schedule exploration used the app's native executor (zed) or a single run (the
-others); this demo is where AFG's own rescheduler is exercised.
+others); this demo is where CRUX's own rescheduler is exercised.
 
-Target: `rail-rs/examples/demo_dynamic` (bin `afg_dyn_demo`), a two-user madsim app.
+Target: `rail-rs/examples/demo_dynamic` (bin `crux_dyn_demo`), a two-user madsim app.
 Toolchain: rustc 1.85 / LLVM 19 (static producer applies). Run date 2026-09-23.
 
 ## The app and the leak
@@ -25,31 +25,31 @@ the order of A's write and B's read, which is what the scheduler controls.
 
 ## What we did
 
-Full AFG pipeline with replay, driven by the `afg` producer binary:
+Full CRUX pipeline with replay, driven by the `afg` producer binary:
 
 ```sh
 # 1) emit LLVM IR for the demo (rustc 1.85)
 cd rail-rs/examples/demo_dynamic
-cargo +1.85.0 rustc --bin afg_dyn_demo -- --emit=llvm-ir -Cdebuginfo=2 -Ccodegen-units=1
-LL=$(ls -t target/debug/deps/afg_dyn_demo-*.ll | head -1)
+cargo +1.85.0 rustc --bin crux_dyn_demo -- --emit=llvm-ir -Cdebuginfo=2 -Ccodegen-units=1
+LL=$(ls -t target/debug/deps/crux_dyn_demo-*.ll | head -1)
 
 # 2) producer -> instrument -> madsim observe -> analyze -> generate schedules -> replay
-cd ../../../afg_prototype
+cd ../../../crux
 LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 ./target/debug/afg \
   --llvm-ir "../rail-rs/examples/demo_dynamic/$LL" \
   --project ../rail-rs/examples/demo_dynamic \
-  --afg-r4-runtime "$PWD/afg_r4_runtime" \
+  --crux-runtime "$PWD/crux_runtime" \
   --llm-api ../rail-rs/signatures/llm_api_functions.json \
   --ac ../rail-rs/signatures/ac_functions.json \
   --data-access ../rail-rs/signatures/data_access_functions.json \
   --run-dir /tmp/afg_dyn --cargo-cmd run --seeds 1 --replay
 ```
 
-The `[5/6] Generate schedules` stage calls `afg_cuie::generate_schedules`, which
+The `[5/6] Generate schedules` stage calls `crux_scheduler::generate_schedules`, which
 emits one candidate schedule (an ordered list of `{principal, site}` steps) per shared
 PANode. The `[6/6] Replay` stage re-runs the instrumented app under madsim once per
-schedule with `AFG_SCHEDULE_PATH` set (which forces that order via the
-`afg_schedule_point!` gate), then `afg_cuie::verify_replay` decides whether a
+schedule with `CRUX_SCHEDULE_PATH` set (which forces that order via the
+`crux_schedule_point!` gate), then `crux_scheduler::verify_replay` decides whether a
 non-owner read of a node its owner wrote actually occurred.
 
 ## What we found
@@ -67,12 +67,12 @@ principal). The scheduler generated 2 candidate interleavings, one per shared no
 replay verdict: 1/2 schedule(s) reproduced a cross-user leak
 ```
 
-So AFG's rescheduler reproduced the cross-user leak by forcing the write-then-read
+So CRUX's rescheduler reproduced the cross-user leak by forcing the write-then-read
 order on the cache node. The reproducing schedule is schedule-001 (the second of the
 two). Artifacts: `results/schedule/` (the two schedules), `results/verdict/` (the two
 verdicts), `results/replay-001.jsonl` (the leaking replay trace).
 
-Metrics (AFG rescheduler, this demo):
+Metrics (CRUX rescheduler, this demo):
 - rescheduled interleavings generated: 2 (one per shared PANode).
 - rescheduled interleavings that reproduced the leak: 1 (schedule-001, the cache node).
 - reschedule-to-leak: 2 (the leak reproduced on the second schedule).
@@ -83,14 +83,14 @@ Metrics (AFG rescheduler, this demo):
 
 Prerequisites: rustc 1.85, LLVM 19 at `/opt/homebrew/opt/llvm@19`, the `afg` producer
 built (`LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin afg`), and the
-demo's `afg_r4_runtime` dependency pointing at `afg_prototype/afg_r4_runtime`. Then run the
+demo's `crux_runtime` dependency pointing at `crux/crux_runtime`. Then run the
 two commands above. To re-time one replay:
 
 ```sh
 cd /tmp/afg_dyn/instrumented
 RUSTFLAGS="--cfg madsim" MADSIM_TEST_SEED=1 \
-  AFG_SCHEDULE_PATH=/tmp/afg_dyn/schedule/schedule-001.json \
-  AFG_TRACE_PATH=/tmp/replay.jsonl cargo +1.85.0 run
+  CRUX_SCHEDULE_PATH=/tmp/afg_dyn/schedule/schedule-001.json \
+  CRUX_TRACE_PATH=/tmp/replay.jsonl cargo +1.85.0 run
 ```
 
 ## What to expect
@@ -106,10 +106,10 @@ RUSTFLAGS="--cfg madsim" MADSIM_TEST_SEED=1 \
 ## How this relates to the real-app results
 
 - On zed (a real app with a native deterministic executor) the schedule-dependent leak
-  was found by sweeping the app's own scheduler; AFG's madsim rescheduler was not used
+  was found by sweeping the app's own scheduler; CRUX's madsim rescheduler was not used
   there because gpui does not build under madsim.
 - The four real-app targets are Tokio or gpui based and do not build under madsim, so
-  this controlled demo is where AFG's rescheduler is exercised directly. It confirms
+  this controlled demo is where CRUX's rescheduler is exercised directly. It confirms
   the rescheduler generates alternative interleavings and reproduces a write-then-read
   cross-user leak by forcing the order, with a concrete reschedule-to-leak count and
   per-replay time.
@@ -118,7 +118,7 @@ RUSTFLAGS="--cfg madsim" MADSIM_TEST_SEED=1 \
 
 `rail-rs/examples/mini-chat-service` was also run through the pipeline. Its leak is a
 read-read cache overlap (both users read the same cached answer), so the runtime
-`afg_leak!` fires ("bob served a cached answer owned by alice") but the write-then-read
+`crux_leak!` fires ("bob served a cached answer owned by alice") but the write-then-read
 replay verdict does not reproduce (the instrumented node is read by both, never
 written): `replay verdict: 0/1`. demo_dynamic is the demo whose instrumented shared
 node carries an explicit write and read, which is why its replay reproduces.

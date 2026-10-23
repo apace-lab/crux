@@ -39,7 +39,7 @@ cover the Cipher-read.
 
 ## The result: the gate flips the verdict (`ab_output.txt`)
 
-Same IR, the debug-type gate toggled with `AFG_NO_TYPE_GATE`:
+Same IR, the debug-type gate toggled with `CRUX_NO_TYPE_GATE`:
 
 ```
 GATE OFF (points-to only):  1 data-access, 1 DOMINATED, 0 candidates   <- leak hidden (false negative)
@@ -68,15 +68,15 @@ rustc +1.86.0 --edition 2021 --crate-type bin --emit=llvm-ir \
   -C opt-level=0 -C debuginfo=2 -C codegen-units=1 typegate_demo.rs -o typegate_demo_dbg.ll
 cd ../../
 # gate off:
-LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 AFG_APP_CRATE=typegate_demo AFG_NO_TYPE_GATE=1 \
+LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=typegate_demo CRUX_NO_TYPE_GATE=1 \
   ./target/release/afg --llvm-ir experiments/typegate-demo/typegate_demo_dbg.ll \
   --ac experiments/typegate-demo/demo_ac.json \
   --data-access experiments/typegate-demo/demo_data.json \
   --llm-api experiments/typegate-demo/demo_llm.json --static-only
-# gate on: drop AFG_NO_TYPE_GATE.
+# gate on: drop CRUX_NO_TYPE_GATE.
 ```
 
 Unit/integration coverage: `rail-rs` `debuginfo::tests::real_propagation` (ignored, run with
-`AFG_TYPEGATE_LL` pointing at this IR) asserts the temporary `%_4` types to `Cipher` and
+`CRUX_TYPEGATE_LL` pointing at this IR) asserts the temporary `%_4` types to `Cipher` and
 `%ctx` to `Ctx`; the dominance type-gate logic is covered by
 `dominance::tests::type_disjoint_check_is_candidate` and siblings.

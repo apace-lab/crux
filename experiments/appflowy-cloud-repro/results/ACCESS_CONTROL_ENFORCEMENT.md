@@ -40,7 +40,7 @@ The same collab store is read by two paths with different enforcement:
 
 So a non-member is refused on the single-get path and served the document on the
 batch path. This matches the dynamic reproduction (`dynamic.md`): a non-member was
-served 4393 bytes of another user's document through the batch endpoint. `afg_observe`
+served 4393 bytes of another user's document through the batch endpoint. `crux_observe`
 on that trace: 1 confirmed resource-linked leak.
 
 ## Reinforced lessons for the analysis design
@@ -69,7 +69,7 @@ on that trace: 1 confirmed resource-linked leak.
    no enforce. Sibling `delete_collab` / upsert do enforce, so `batch_get_collab` is the
    outlier.
 3. Dynamic confirmation: see `dynamic.md` (a non-member is served 4393 bytes of another
-   user's document through the batch endpoint); `afg_observe` on `trace.jsonl` reports 1
+   user's document through the batch endpoint); `crux_observe` on `trace.jsonl` reports 1
    resource-linked leak.
 
 Expect: `get_full_encode_collab` = dominated, `batch_get_collab` = unscoped (the leak),

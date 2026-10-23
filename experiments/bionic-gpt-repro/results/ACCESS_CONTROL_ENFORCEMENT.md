@@ -37,7 +37,7 @@ current_app_user()`), and `current_app_user()` is fail-closed. Two consequences:
   (fail-closed).
 
 This matches the earlier dynamic result (`dynamic.md`, `trace.jsonl`): bob's read of
-alice's conversation returned 0 rows, and `afg_observe` reported 0 leaks. The
+alice's conversation returned 0 rows, and `crux_observe` reported 0 leaks. The
 enforcement pass explains the "why": the read is dominated in-query, on every path.
 
 ## Where bionic sits in the enforcement-style taxonomy
@@ -75,7 +75,7 @@ without it.
 4. Confirm the principal is set per request:
    `grep -n "SET LOCAL row_level_security.user_id" ../../../../bionic-gpt/crates/db/authz.rs`.
 5. Dynamic confirmation: see `dynamic.md` / `RESULTS.md` (bob's read of alice's
-   conversation returns 0 rows; `afg_observe` on `trace.jsonl` reports 0 leaks).
+   conversation returns 0 rows; `crux_observe` on `trace.jsonl` reports 0 leaks).
 
 Expect: every tenant read query embeds `current_app_user()`, the principal is
 mandatory, and no unguarded tenant read is found (true negative).

@@ -21,7 +21,7 @@ one access is un-dominated (the leak), two are dominated.
 recipients are not revalidated against current membership, and neither
 `remove_channel_member` nor `set_channel_member_role` (downgrade to Banned) evicts the
 buffer collaborator. So a removed/downgraded member keeps receiving edits -- the read
-of the shared buffer is not dominated by a membership check for the recipient. AFG
+of the shared buffer is not dominated by a membership check for the recipient. CRUX
 confirms this dynamically (persistent leak; also a schedule-dependent join/removal
 race), and it is the one place the invariant fails. Full detail + traces + the seed
 sweep are in RESULTS.md; the maintainer report is in DISCLOSURE.md.
@@ -51,7 +51,7 @@ path. Contrast bionic, where the check is embedded in the query and cannot be om
 The static producer is blocked (LLVM 20), so this pass is done from the trace and code:
 the broadcast recipient set (`channel_buffer_collaborator` vs `project_collaborator`)
 and whether each membership transition (removal, downgrade, leave) maintains it. The
-AFG delivery probes on both broadcast paths make the "who was served" question
+CRUX delivery probes on both broadcast paths make the "who was served" question
 observable directly.
 
 ## How to reproduce
@@ -68,9 +68,9 @@ observable directly.
    single transactions (`db/queries/projects.rs`, `db/queries/rooms.rs`).
 4. Dynamic confirmation and sweeps: run the tests
    `channel_buffer_tests::{test_afg_removed_member_persistent_leak, test_afg_banned_member_still_receives_edits, test_afg_join_removal_race, test_afg_project_leave_no_leak}`
-   with `AFG_TRACE_PATH` set, then take the verdict with `afg_observe`. Commands and
+   with `CRUX_TRACE_PATH` set, then take the verdict with `crux_observe`. Commands and
    sweep scripts are in `RESULTS.md`.
 
 Expect: the buffer edit broadcast delivers to a removed or banned member (leak,
-`afg_observe` reports it); the project worktree broadcast never delivers to a departed
+`crux_observe` reports it); the project worktree broadcast never delivers to a departed
 guest (control, no leak).

@@ -112,10 +112,10 @@ this path, and we should disclose it to the tabby maintainers (same as the zed g
    `grep -n "list_thread_messages\|check_read_thread" ../../../../tabby/ee/tabby-webserver/src/service/page.rs`.
 4. Dynamic confirmation: `bash scripts/03_dynamic.sh` (drives the real
    `check_read_thread` and the unguarded `convert_thread_to_page` read on an ephemeral
-   thread), then `cd ../../afg_observe && cargo run --example analyze -- <trace>`.
+   thread), then `cd ../../crux_observe && cargo run --example analyze -- <trace>`.
 
 Expect: the enforcement enumeration flags `list_thread_messages` as unscoped at the DB
 layer; the triage shows it is guarded on the `thread_messages` path but not on the
 `convert_thread_to_page` path; the dynamic run prints "guarded path REFUSES bob" and
-"conversion path bob served alice's PRIVATE thread", and `afg_observe` reports 1
+"conversion path bob served alice's PRIVATE thread", and `crux_observe` reports 1
 confirmed leak.

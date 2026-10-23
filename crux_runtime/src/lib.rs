@@ -4,7 +4,7 @@ use std::{
     env,
     fs::{File, OpenOptions},
     future::Future,
-    io::Write,
+    io::{BufWriter, Write},
     path::PathBuf,
     sync::{Mutex, OnceLock},
 };
@@ -247,7 +247,10 @@ struct EventEnvelope {
 }
 
 struct TraceWriter {
-    file: Mutex<File>,
+    // BufWriter coalesces serde_json's many small writes per event into one
+    // buffered region; record() flushes once per event so no events are lost
+    // if the host process is killed (SIGKILL does not run Drop).
+    file: Mutex<BufWriter<File>>,
     seq: Mutex<u64>,
 }
 
@@ -267,7 +270,7 @@ fn trace_writer() -> &'static TraceWriter {
             .expect("failed to open CRUX trace file");
 
         TraceWriter {
-            file: Mutex::new(file),
+            file: Mutex::new(BufWriter::new(file)),
             seq: Mutex::new(0),
         }
     })
@@ -287,6 +290,10 @@ pub fn record(event: Event) {
     let mut file = writer.file.lock().expect("CRUX trace lock poisoned");
     serde_json::to_writer(&mut *file, &envelope).expect("failed to serialize CRUX event");
     file.write_all(b"\n").expect("failed to write CRUX trace");
+    // Flush per event so the trace is complete even if the host process is
+    // SIGKILLed by a test harness; the BufWriter still coalesces serde_json's
+    // many small writes into a single syscall per event.
+    file.flush().expect("failed to flush CRUX trace");
 }
 
 pub fn monitor(function_id: FunctionId, module: &'static str, file: &'static str, line: u32) {

@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use utoipa::OpenApi;
 
-// Emit an CRUX resource-linked access event (the same JSONL format crux_r4_runtime produces and
-// crux_observe consumes). In a tokio app, crux_r4_instrument + crux_r4_runtime inject these
+// Emit an CRUX resource-linked access event (the same JSONL format crux_runtime produces and
+// crux_observe consumes). In a tokio app, crux_instrument + crux_runtime inject these
 // automatically with the task-local principal; this sync server emits them directly, tagging
 // the principal from the request. `count` is the rows served (0 = denied/empty = dominated).
 static SEQ: AtomicU64 = AtomicU64::new(1);
