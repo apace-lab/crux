@@ -11,7 +11,7 @@ and vaultwarden, which are LLVM 20). This is a non-LLM target. Run date 2026-10-
 
 Every data-access query in the server is scoped to the authenticated user with a
 `where user_id = $1` predicate, so one user is never served another user's records. The
-code audit is conclusive; a dynamic AFG-native run (below) confirms it.
+code audit is conclusive; a dynamic CRUX-native run (below) confirms it.
 
 ## The mechanism (verified in code)
 
@@ -38,26 +38,26 @@ code audit is conclusive; a dynamic AFG-native run (below) confirms it.
   key-value `store` reads/writes are all scoped the same way (`where user_id = $1`), and
   the deletes likewise.
 
-In AFG terms the record read is dominated, on every path, by the `user_id = $1` predicate
+In CRUX terms the record read is dominated, on every path, by the `user_id = $1` predicate
 that is part of the query itself. This is the same enforcement shape as bionic-gpt (the
 ownership check is embedded in the SQL, not a separable pre-call), here on a non-LLM
 service. It contrasts with dufs (separable check, consistently applied) and with
 vaultwarden (separable check, omitted on one endpoint, which leaks).
 
-## AFG instrumentation and dynamic verdict
+## CRUX instrumentation and dynamic verdict
 
-We instrumented atuin's real database layer with an AFG probe behind an off-by-default
-`afg-probe` cargo feature (not part of a normal build), using `serde_json` to serialize
+We instrumented atuin's real database layer with an CRUX probe behind an off-by-default
+`crux-probe` cargo feature (not part of a normal build), using `serde_json` to serialize
 the trace:
 
-- A probe module `crates/atuin-server-postgres/src/afg_probe.rs`.
+- A probe module `crates/atuin-server-postgres/src/crux_probe.rs`.
 - Two probe sites on PANode 9400 in `atuin-server-postgres`: `add_records` (a record a
   user uploads, `function_id` 940001, recorded as `Write(user, store:<record-id>)`, the
   owner) and `next_records` (each record served to a user, `function_id` 940002, recorded
   as `Read(user, store:<record-id>, count=1)`). The store's stable per-record identity is
   the record's `client_id` (`= i.id`), so a write and a later read of the same record
   share one resource string.
-- Built with `cargo build -p atuin --features atuin-server-postgres/afg-probe` on the
+- Built with `cargo build -p atuin --features atuin-server-postgres/crux-probe` on the
   pinned rustc 1.86; the server ran against a PostgreSQL 16 instance (Docker), which the
   server migrates automatically on start.
 
@@ -77,18 +77,18 @@ seq3 Read  user:2(bob)   store:50a3...  940002 next_records  count=1  (bob reads
 
 bob's cross-user request (`next?host=Ha`) returned an empty list, so `next_records` served
 zero rows and emitted no read event: the `where user_id = $1` predicate dominated the
-read. `afg_observe` (`results/afg_observe_verdict.txt`) reports:
+read. `crux_observe` (`results/afg_observe_verdict.txt`) reports:
 
 ```
 coarse PANode overlaps (static-style signal): 1   (alice and bob both reach node 9400)
 resource-linked leak verdict: 0 confirmed leaks
 ```
 
-This is the AFG-native true negative: both principals reach the record-store node (the
+This is the CRUX-native true negative: both principals reach the record-store node (the
 coarse overlap), but each only ever touches records it owns (0 resource leaks), because
 every query is scoped by `user_id`. A broken `next_records` that dropped the `user_id`
 predicate would serve alice's `store:94b5...` to bob, which the probe would record as
-`Read(bob, store:94b5..., count=1)` against owner alice, and `afg_observe` would report as
+`Read(bob, store:94b5..., count=1)` against owner alice, and `crux_observe` would report as
 a confirmed cross-user leak. So the probe has real discriminating power and does not
 assume the answer.
 
@@ -101,9 +101,9 @@ cannot fetch another user's records even by supplying another user's host id.
 ## Static datapoint (LLVM-19)
 
 atuin pins rustc 1.86, which emits LLVM 19, so unlike dufs and vaultwarden (LLVM 20) the
-AFG static producer runs on it. We generated LLVM-19 IR for `atuin-server-postgres` (the
+CRUX static producer runs on it. We generated LLVM-19 IR for `atuin-server-postgres` (the
 data-access crate) and ran the producer in static-only mode
-(`afg --static-only --llvm-ir atuin_server_postgres.ll`, with `AFG_APP_CRATE=
+(`afg --static-only --llvm-ir atuin_server_postgres.ll`, with `CRUX_APP_CRATE=
 atuin_server_postgres`), using a local LLVM 19. Results:
 
 - The PAG + inclusion-based points-to solver runs and reaches a fixed point: **31,754 PAG
@@ -124,7 +124,7 @@ Two methodology notes. First, the IR must be built unoptimized (debug): a releas
 inlines the sqlx calls and the catalog then matches 0 data-access sites; the debug IR
 preserves the calls (same approach as the other LLVM-19 targets). Second, the
 single-crate IR has no real `main`, so the app-crate heuristic must be overridden with
-`AFG_APP_CRATE` (otherwise it latches onto a monomorphized `core::slice::sort` function
+`CRUX_APP_CRATE` (otherwise it latches onto a monomorphized `core::slice::sort` function
 and scopes the catalog to `core`). The opaque-pointer GEP warnings in the log are the
 known LLVM-19 field-sensitivity limitation.
 

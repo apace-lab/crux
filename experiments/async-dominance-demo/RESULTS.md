@@ -31,7 +31,7 @@ dominator tree does not see `authorize`'s block dominating it: the `await` break
 
 ## The result: coroutine normalization flips the verdict (`ab_output.txt`)
 
-Same IR, toggled with `AFG_NO_COROUTINE_DOM`:
+Same IR, toggled with `CRUX_NO_COROUTINE_DOM`:
 
 ```
 OFF (plain dominance):      4 data-access, 1 dominated, 3 candidates   <- guarded wrongly flagged (FP)
@@ -65,12 +65,12 @@ rustc +1.86.0 --edition 2021 --crate-type bin --emit=llvm-ir \
   -C opt-level=0 -C debuginfo=2 -C codegen-units=1 async_demo.rs -o async_demo_dbg.ll
 cd ../../
 # plain dominance (await breaks it):
-LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 AFG_APP_CRATE=async_demo AFG_NO_COROUTINE_DOM=1 \
+LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=async_demo CRUX_NO_COROUTINE_DOM=1 \
   ./target/release/afg --llvm-ir experiments/async-dominance-demo/async_demo_dbg.ll \
   --ac experiments/async-dominance-demo/demo_ac.json \
   --data-access experiments/async-dominance-demo/demo_data.json \
   --llm-api experiments/async-dominance-demo/demo_llm.json --static-only
-# coroutine-aware: drop AFG_NO_COROUTINE_DOM.
+# coroutine-aware: drop CRUX_NO_COROUTINE_DOM.
 ```
 
 Unit coverage: `rail-rs` `control_flow_graph::coroutine_tests` (detects the async coroutine,

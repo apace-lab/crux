@@ -45,18 +45,18 @@ row-level security, AppFlowy-Cloud puts it in casbin; tabby has neither.
 
 Prerequisites: this CRUX checkout with the producer built (rustc 1.85 emits LLVM 19
 IR, LLVM 19 at `/opt/homebrew/opt/llvm@19`), the sqlite3 CLI, and a tabby checkout
-at `$TABBY` (`cargo fetch`-ed). Put the absolute path of `afg_prototype/crux_r4_runtime`
+at `$TABBY` (`cargo fetch`-ed). Put the absolute path of `crux/crux_runtime`
 in the harness Cargo.toml. Build the producer once:
 
 ```sh
-cd ../..                      # $CRUX_ROOT/afg_prototype
+cd ../..                      # $CRUX_ROOT/crux
 LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin crux
 ```
 
 Then run the three stages:
 
 ```sh
-cd afg_prototype/experiments/tabby-repro
+cd crux/experiments/tabby-repro
 bash scripts/01_schema_db.sh     # schema-only sqlite DB from tabby's 49 migrations
 bash scripts/02_static.sh        # emit tabby-webserver IR + run the producer
 bash scripts/03_dynamic.sh       # drive tabby's real DB code as two users -> trace + leak

@@ -1,4 +1,4 @@
-# AFG on zed (collab server) - results
+# CRUX on zed (collab server) - results
 
 Target: `zed-industries/zed`, crate `crates/collab` (the collaboration server), commit
 `739fdbe`. Toolchain rustc 1.98.1 (LLVM 20+), so this is a **dynamic** target (the
@@ -11,7 +11,7 @@ AppFlowy = casbin RBAC, zed = membership check).
 
 The shared resource is the per-channel collaborative buffer ("channel notes"),
 labeled PANode 7300 in the dynamic trace. Two principals reach it (the coarse
-static-style overlap AFG flags), but the resource-linked dynamic refinement finds
+static-style overlap CRUX flags), but the resource-linked dynamic refinement finds
 no leak: the read is dominated on all paths by the participant check.
 
 Run on the real collab server via zed's own integration harness (`TestServer` +
@@ -37,7 +37,7 @@ server: B's request reached the handler (auth event present) but the participant
 check returned `Err` at the `?` before the read probe. The test asserts B's request
 `is_err()` - B got an error, not the buffer.
 
-`afg_observe`:
+`crux_observe`:
 ```
 principals: 1
   1: read_nodes={7300} write_nodes={}
@@ -56,7 +56,7 @@ auth/access  principal 1  node 7300  read  channel:1
 auth/access  principal 2  node 7300  read  channel:1
 ```
 
-`afg_observe`:
+`crux_observe`:
 ```
 principals: 2
 coarse PANode overlaps: 1   ->   1 <-> 2 on nodes {7300}
@@ -67,14 +67,14 @@ The coarse overlap is present (two principals reach the shared buffer store) but
 resource-linked verdict is clean: both reads are authorized members, no cross-user
 instance data is served.
 
-## What is real zed vs AFG scaffolding
+## What is real zed vs CRUX scaffolding
 
 Real zed: the collab server, the RPC handlers (`join_channel_buffer`,
 `update_channel_buffer`), the DB queries (`db.join_channel_buffer`), the guard
 `check_user_is_channel_participant`, and the whole `TestServer`/`TestClient`
-integration harness. Hand-added: `crates/collab/src/afg_probe.rs` (the JSONL emitter,
-a no-op unless `AFG_TRACE_PATH` is set), two probe calls in `rpc.rs`
-(`afg_probe::auth` at the handler entry, `afg_probe::access` right after the DB read),
+integration harness. Hand-added: `crates/collab/src/crux_probe.rs` (the JSONL emitter,
+a no-op unless `CRUX_TRACE_PATH` is set), two probe calls in `rpc.rs`
+(`crux_probe::auth` at the handler entry, `crux_probe::access` right after the DB read),
 and the `test_afg_non_member_denied` integration test that drives the malicious-client
 path. Node id 7300 stands for the shared channel-buffer store the overlap analysis
 flags.
@@ -86,13 +86,13 @@ flags.
 docker run --rm \
   -v ~/afg/zed:/zed -v zed_target:/target \
   -v zed_cargo_reg:/usr/local/cargo/registry -v zed_cargo_git:/usr/local/cargo/git \
-  -e CARGO_TARGET_DIR=/target -e AFG_TRACE_PATH=/zed/afg_trace_denied.jsonl \
+  -e CARGO_TARGET_DIR=/target -e CRUX_TRACE_PATH=/zed/afg_trace_denied.jsonl \
   -w /zed zed-afg:base bash -c 'export PATH=/usr/local/cargo/bin:$PATH; \
     cargo test -p collab --test collab_tests --features test-support -- \
     channel_buffer_tests::test_afg_non_member_denied --exact --nocapture'
 
 # verdict:
-cd afg_prototype/afg_observe
+cd crux/crux_observe
 cargo run --example analyze -- ../experiments/zed-repro/results/afg_trace_denied.jsonl
 ```
 
@@ -110,7 +110,7 @@ invariant (non-member never reads node 7300) held on every schedule.
 | RPC handlers (access-control edge points) | 176 |
 | Data-layer membership-guard sites | 15 (buffers 3 + channels 12) |
 | LLM API calls | 0 (collab is not an LLM app) |
-| Instrumented sites (AFG probe) | 2 (auth + channel-buffer read), node 7300 |
+| Instrumented sites (CRUX probe) | 2 (auth + channel-buffer read), node 7300 |
 
 ### Seeds / interleavings / leaks
 | Scenario | Seeds | Distinct interleavings | Overlaps found | Leaks found |
@@ -137,9 +137,9 @@ Totals: 240 instrumented+baseline runs across the two sweeps in ~244s wall
 (sequential sweep 119s / 120 runs; race sweep 125s / 120 runs). Build: cold 4m29s,
 incremental after a source edit 10-22s.
 
-## Removal-path LEAK (AFG-discovered): post-revocation buffer delivery
+## Removal-path LEAK (CRUX-discovered): post-revocation buffer delivery
 
-The join path is guarded (above), but AFG found a real cross-user leak on the
+The join path is guarded (above), but CRUX found a real cross-user leak on the
 *update/broadcast* path: a member removed from a channel keeps receiving the
 channel's collaborative document edits.
 
@@ -160,7 +160,7 @@ Mechanism (all real zed code, commit 739fdbe):
 
 This is a check-at-join / use-during-session gap: access is verified when joining
 the buffer but never revalidated during the live session, and revocation does not
-tear the session down. It is the exact failure the AFG dominance invariant targets
+tear the session down. It is the exact failure the CRUX dominance invariant targets
 (a shared-resource access that is not dominated by an ownership check for the
 current principal on ALL paths).
 
@@ -177,7 +177,7 @@ write  principal 1  channel:1  count 1     (A edit #3)
 read   principal 2  channel:1  count 1     (removed B delivered edit #3)   <- LEAK
 ```
 
-`afg_observe`: `resource-linked leak verdict: 3 confirmed leak(s)` (B, a non-member,
+`crux_observe`: `resource-linked leak verdict: 3 confirmed leak(s)` (B, a non-member,
 served A's channel:1 on every edit). The single-edit case is
 `results/afg_trace_removed_drained.jsonl` (1 leak).
 
@@ -196,7 +196,7 @@ leaks (confirmed), analogous to AppFlowy (single-get guarded, batch leaks).
 
 ## Schedule-DEPENDENT LEAK (join vs removal race): the schedule-driven-testing result
 
-The persistent leak above is deterministic. AFG also finds a variant whose very
+The persistent leak above is deterministic. CRUX also finds a variant whose very
 existence depends on the interleaving, which is the case schedule-driven testing is
 for. Scenario: B is a channel member but has NOT opened the buffer; A removes B and
 B opens the buffer CONCURRENTLY (no drain between the two RPCs). Two orderings:
@@ -215,8 +215,8 @@ removal wins (clean): 25 / 40 seeds
 first leaking seed:   seed index 2 (the 3rd seed tried); seeds 0,1 are clean
 ```
 
-`afg_observe` on a leaking seed: `1 confirmed leak (2 read 1's channel:1, served 1
-row)`. So a single "natural" run misses the leak 62.5% of the time; AFG's schedule
+`crux_observe` on a leaking seed: `1 confirmed leak (2 read 1's channel:1, served 1
+row)`. So a single "natural" run misses the leak 62.5% of the time; CRUX's schedule
 sweep surfaces it by the 3rd interleaving.
 
 Metrics (schedule-driven testing, this leak):
@@ -227,7 +227,7 @@ Metrics (schedule-driven testing, this leak):
 
 This is the same underlying bug as the persistent leak (removal does not evict the
 buffer collaborator and the broadcast rechecks only the writer); the race decides
-whether B gets INTO the collaborator set. It demonstrates that AFG's seed sweep
+whether B gets INTO the collaborator set. It demonstrates that CRUX's seed sweep
 finds a real cross-user leak that a single interleaving misses.
 
 ## Role-downgrade variant (verified 2026-09-23)
@@ -237,7 +237,7 @@ to `Banned` (loses read access) through `set_channel_member_role` also fails to 
 the buffer session (the handler calls `notify_membership_updated` but never removes
 the `channel_buffer_collaborator` row). Test
 `channel_buffer_tests::test_afg_banned_member_still_receives_edits`: after the ban, A
-edit is delivered to banned B; `afg_observe` = 1 confirmed leak
+edit is delivered to banned B; `crux_observe` = 1 confirmed leak
 (`afg_trace_banned.jsonl`). So the root cause is general (any access-losing
 membership transition, not just removal), which broadens both the finding and the
 required fix.
@@ -259,7 +259,7 @@ the POST-leave update is delivered only to C, never to B. Seed sweep (20 seeds):
 B received the post-leave update in 0/20 schedules; C in 20/20 (sanity). So the
 departed guest is evicted on every interleaving.
 
-This is the discriminating result: the SAME AFG technique flags the channel-buffer
+This is the discriminating result: the SAME CRUX technique flags the channel-buffer
 subsystem (invariant violated: access not revalidated / not torn down on revocation)
 and clears the project subsystem (invariant holds: collaborator lifecycle atomically
 dominated by membership). The structural difference is exactly the dominance invariant.

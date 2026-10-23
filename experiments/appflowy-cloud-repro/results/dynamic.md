@@ -1,6 +1,6 @@
 # AppFlowy-Cloud: instrumented dynamic run
 
-AppFlowy-Cloud built from source, instrumented with AFG probes, run with two real
+AppFlowy-Cloud built from source, instrumented with CRUX probes, run with two real
 users. Target: AppFlowy-Cloud commit `c5bcfd3` (2026-09-11). Run date 2026-09-16.
 
 ## What we found
@@ -28,7 +28,7 @@ auth   bob
 read   collab:WS  count 4393     bob served alice's document (batch)
 ```
 
-`afg_observe` over that trace:
+`crux_observe` over that trace:
 
 ```
 overlap: alice <-> bob on the collab store node
@@ -38,7 +38,7 @@ resource-linked leak: 1   bob read alice's collab:WS, served 4393 bytes
 What it means: both users reach the same store node and the same document, but the
 per-instance verdict fires only for the batch read. bob's single-get returned no
 bytes (the casbin check dominated it), his batch read returned alice's bytes (no
-check). That is the bug AFG targets: a read of a shared resource that is not
+check). That is the bug CRUX targets: a read of a shared resource that is not
 guarded for the requesting user. In this checkout `batch_get_collab` takes the
 user id as `_uid` (unused), does no per-object check, and has no access-control
 middleware in front of the route.
@@ -52,13 +52,13 @@ service, drive two users.
 # 1) build (rustc 1.86 / LLVM 19; SQLX_OFFLINE=true; apt: protobuf-compiler lld clang)
 cargo build --bin appflowy_cloud
 
-# 2) apply the AFG instrumentation (probe module + auth/read calls in the two
+# 2) apply the CRUX instrumentation (probe module + auth/read calls in the two
 #    collab handlers), then rebuild. On a clean checkout of commit c5bcfd3:
 #      git apply .../appflowy-cloud-repro/instrumentation.patch
-#    (adds src/afg_probe.rs and edits src/lib.rs, src/api/workspace.rs)
+#    (adds src/crux_probe.rs and edits src/lib.rs, src/api/workspace.rs)
 
 # 3) bring the stack up with a compose override that runs the built binary as the
-#    appflowy_cloud service and sets AFG_TRACE_PATH (backing services: postgres,
+#    appflowy_cloud service and sets CRUX_TRACE_PATH (backing services: postgres,
 #    redis, gotrue, minio, nginx; casbin on). minio: point at quay.io/minio/minio.
 
 # 4) sign up + verify alice and bob (source build has no seat limit), then:
@@ -66,7 +66,7 @@ GET /api/workspace/{WS}/collab/{WS}      # single -> 1012 refused
 GET /api/workspace/{WS}/collab_list      # batch  -> 200, alice's bytes (leak)
 
 # 5) copy the trace out of the container and analyze it
-cargo run --example analyze -- results/trace.jsonl   # from afg_observe
+cargo run --example analyze -- results/trace.jsonl   # from crux_observe
 ```
 
 Expected: single-get refused, batch-get served, and one confirmed
@@ -76,5 +76,5 @@ resource-linked leak (bob read alice's document).
 
 The leak is in commit `c5bcfd3`. A newer released image adds the check and blocks
 bob on the batch path too (see the prebuilt-image run in RESULTS.md). So this is a
-real bug in that version, since fixed upstream; AFG would have caught it before
+real bug in that version, since fixed upstream; CRUX would have caught it before
 the fix.

@@ -1,6 +1,6 @@
 # AppFlowy-Cloud: static pass
 
-Running the AFG producer statically on AppFlowy, to see if it flags the missing
+Running the CRUX producer statically on AppFlowy, to see if it flags the missing
 check on its own. Target: AppFlowy-Cloud commit `c5bcfd3`. Run date 2026-09-16.
 
 ## What we found
@@ -44,8 +44,8 @@ statically.
 # emit IR for the crate (rustc 1.86 / LLVM 19; SQLX_OFFLINE=true)
 cargo rustc -p appflowy-collaborate --lib -- --emit=llvm-ir -Cdebuginfo=1 -Ccodegen-units=1
 
-# run the producer on it (lib crate -> AFG_APP_CRATE)
-AFG_APP_CRATE=appflowy_collaborate LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 \
+# run the producer on it (lib crate -> CRUX_APP_CRATE)
+CRUX_APP_CRATE=appflowy_collaborate LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 \
   afg --static-only --llvm-ir <the .ll> \
   --project .../services/appflowy-collaborate \
   --ac .../signatures/ac_functions.json \
@@ -57,7 +57,7 @@ Expected: about 11 data-access sites, 0 auth, 0 AC points.
 
 ## Bottom line
 
-Static AFG runs on AppFlowy and finds the shared reads, but cannot see the casbin
+Static CRUX runs on AppFlowy and finds the shared reads, but cannot see the casbin
 guard because it is behind dynamic dispatch across a crate boundary, so it cannot
 auto-prove the missing check here. The dynamic run (dynamic.md) does prove it.
 Pairing the two on AppFlowy is blocked on devirtualization, not on the toolchain.
