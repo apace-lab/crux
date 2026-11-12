@@ -374,7 +374,13 @@ fn run_pag_and_crux(
         use std::collections::{BTreeMap, BTreeSet};
 
         let app = engine.app_crate.clone();
-        let in_app = |name: &str| app.is_empty() || name.contains(app.as_str());
+        // Multi-crate workspace scope: the app crate derived from `main` is a single
+        // crate (e.g. "lemmy_server"), but real applications spread the DAO/data-access
+        // code across sibling crates sharing the workspace prefix (lemmy_api,
+        // lemmy_db_schema, lemmy_db_views). PSA already propagates across them
+        // (should_propagate_execution_into); ACE must scope the same way or the
+        // data accesses in those crates are dropped. See rail_rs::in_app_workspace.
+        let in_app = |name: &str| app.is_empty() || rail_rs::in_app_workspace(&app, name);
 
         // Propagate recovered debug types through the SSA dataflow so temporaries (the
         // actual resource pointers at real access sites, e.g. GEP results and spill loads)
