@@ -340,7 +340,7 @@ attributes #5 = { "frame-pointer"="non-leaf" "target-cpu"="apple-m1" }
 !27 = !{i32 2, !"Debug Info Version", i32 3}
 !28 = !{!"rustc version 1.86.0 (05f9846f8 2025-03-31)"}
 !29 = distinct !DICompileUnit(language: DW_LANG_Rust, file: !30, producer: "clang LLVM (rustc version 1.86.0 (05f9846f8 2025-03-31))", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !31, globals: !44, splitDebugInlining: false, nameTableKind: None)
-!30 = !DIFile(filename: "src/main.rs/@/main.faffb8145578e6cd-cgu.0", directory: "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/experiments/autoinstrument-demo/app")
+!30 = !DIFile(filename: "src/main.rs/@/main.faffb8145578e6cd-cgu.0", directory: "/workspace/crux/experiments/autoinstrument-demo/app")
 !31 = !{!32, !40}
 !32 = !DICompositeType(tag: DW_TAG_enumeration_type, name: "Alignment", scope: !33, file: !2, baseType: !35, size: 8, align: 8, flags: DIFlagEnumClass, elements: !36)
 !33 = !DINamespace(name: "fmt", scope: !34)
@@ -732,7 +732,7 @@ attributes #5 = { "frame-pointer"="non-leaf" "target-cpu"="apple-m1" }
 !419 = !DILocation(line: 2427, column: 15, scope: !413)
 !420 = !DILocation(line: 2429, column: 6, scope: !413)
 !421 = distinct !DISubprogram(name: "db_read", linkageName: "_ZN4main7db_read17h81e40bb4e1ef0e71E", scope: !394, file: !422, line: 9, type: !423, scopeLine: 9, flags: DIFlagPrototyped, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !29, templateParams: !23, retainedNodes: !425)
-!422 = !DIFile(filename: "src/main.rs", directory: "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/experiments/autoinstrument-demo/app", checksumkind: CSK_MD5, checksum: "bde3bf00d994fec0ee4e4121532b8cb9")
+!422 = !DIFile(filename: "src/main.rs", directory: "/workspace/crux/experiments/autoinstrument-demo/app", checksumkind: CSK_MD5, checksum: "bde3bf00d994fec0ee4e4121532b8cb9")
 !423 = !DISubroutineType(types: !424)
 !424 = !{!210, !392}
 !425 = !{!426}

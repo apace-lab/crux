@@ -9,7 +9,7 @@ The producer finds the shared-store reads and writes, but not the casbin guard,
 so it cannot yet auto-prove the missing check on this app.
 
 We emitted IR for the `appflowy-collaborate` crate (98 MB; rustc 1.86 emits LLVM
-19, which the producer reads) and ran `afg --static-only`. Result: 11 data-access
+19, which the producer reads) and ran `crux --static-only`. Result: 11 data-access
 sites matched (sqlx `fetch_one` / `fetch_optional` / `execute`, dashmap `get` /
 `insert`, redis `get`), and 0 access-control points.
 
@@ -46,7 +46,7 @@ cargo rustc -p appflowy-collaborate --lib -- --emit=llvm-ir -Cdebuginfo=1 -Ccode
 
 # run the producer on it (lib crate -> CRUX_APP_CRATE)
 CRUX_APP_CRATE=appflowy_collaborate LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 \
-  afg --static-only --llvm-ir <the .ll> \
+  crux --static-only --llvm-ir <the .ll> \
   --project .../services/appflowy-collaborate \
   --ac .../signatures/ac_functions.json \
   --data-access .../signatures/data_access_functions.json \

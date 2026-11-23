@@ -99,7 +99,7 @@ part of the shipped runtime:
   principal the owner of that namespaced instance.
 
 Driving spiceai's own two-principal e2e scenario with the probe active
-(`CRUX_TRACE_PATH` set) produced a 12-event trace (`results/afg_trace.jsonl`) with two
+(`CRUX_TRACE_PATH` set) produced a 12-event trace (`results/crux_trace.jsonl`) with two
 API-key principals. `crux_observe` (via `cargo run --example analyze_trace`) reports:
 
 ```
@@ -150,13 +150,13 @@ CRUX-native run (instrumented, produces the trace + verdict above):
 ```sh
 cd spiceai
 # 1. Drive spiceai's real cache code with the CRUX probe active.
-CRUX_TRACE_PATH=/tmp/spiceai_afg_trace.jsonl \
+CRUX_TRACE_PATH=/tmp/spiceai_crux_trace.jsonl \
   cargo test -p runtime --test integration --features duckdb,crux-probe -- \
   acceleration::caching_mode_per_principal::caching_accelerator_isolates_per_principal_e2e --nocapture
 
 # 2. Reach the verdict with CRUX's analyzer.
-cd ../AFG/crux
-cargo run --example analyze_trace -- /tmp/spiceai_afg_trace.jsonl
+cd ../crux
+cargo run --example analyze_trace -- /tmp/spiceai_crux_trace.jsonl
 ```
 
 Plain regression run (no CRUX instrumentation, spiceai's own assertion only):

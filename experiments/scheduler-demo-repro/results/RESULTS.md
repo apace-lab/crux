@@ -25,7 +25,7 @@ the order of A's write and B's read, which is what the scheduler controls.
 
 ## What we did
 
-Full CRUX pipeline with replay, driven by the `afg` producer binary:
+Full CRUX pipeline with replay, driven by the `crux` producer binary:
 
 ```sh
 # 1) emit LLVM IR for the demo (rustc 1.85)
@@ -35,14 +35,14 @@ LL=$(ls -t target/debug/deps/crux_dyn_demo-*.ll | head -1)
 
 # 2) producer -> instrument -> madsim observe -> analyze -> generate schedules -> replay
 cd ../../../crux
-LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 ./target/debug/afg \
+LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 ./target/debug/crux \
   --llvm-ir "../rail-rs/examples/demo_dynamic/$LL" \
   --project ../rail-rs/examples/demo_dynamic \
   --crux-runtime "$PWD/crux_runtime" \
   --llm-api ../rail-rs/signatures/llm_api_functions.json \
   --ac ../rail-rs/signatures/ac_functions.json \
   --data-access ../rail-rs/signatures/data_access_functions.json \
-  --run-dir /tmp/afg_dyn --cargo-cmd run --seeds 1 --replay
+  --run-dir /tmp/crux_dyn --cargo-cmd run --seeds 1 --replay
 ```
 
 The `[5/6] Generate schedules` stage calls `crux_scheduler::generate_schedules`, which
@@ -81,22 +81,22 @@ Metrics (CRUX rescheduler, this demo):
 
 ## How to reproduce
 
-Prerequisites: rustc 1.85, LLVM 19 at `/opt/homebrew/opt/llvm@19`, the `afg` producer
-built (`LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin afg`), and the
+Prerequisites: rustc 1.85, LLVM 19 at `/opt/homebrew/opt/llvm@19`, the `crux` producer
+built (`LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 cargo build --bin crux`), and the
 demo's `crux_runtime` dependency pointing at `crux/crux_runtime`. Then run the
 two commands above. To re-time one replay:
 
 ```sh
-cd /tmp/afg_dyn/instrumented
+cd /tmp/crux_dyn/instrumented
 RUSTFLAGS="--cfg madsim" MADSIM_TEST_SEED=1 \
-  CRUX_SCHEDULE_PATH=/tmp/afg_dyn/schedule/schedule-001.json \
+  CRUX_SCHEDULE_PATH=/tmp/crux_dyn/schedule/schedule-001.json \
   CRUX_TRACE_PATH=/tmp/replay.jsonl cargo +1.85.0 run
 ```
 
 ## What to expect
 
 - `instrumentation sites: 1 auth, 1 llm-access, 2 total`.
-- 2 schedules under `/tmp/afg_dyn/schedule/` (one for node 890, one for node 5000).
+- 2 schedules under `/tmp/crux_dyn/schedule/` (one for node 890, one for node 5000).
 - `schedule 000: not reproduced`; `schedule 001: LEAK REPRODUCED (alice wrote PANode
   5000, then bob read it)`; `replay verdict: 1/2 schedule(s) reproduced a cross-user
   leak`.

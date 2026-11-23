@@ -408,7 +408,7 @@ attributes #5 = { "frame-pointer"="non-leaf" "target-cpu"="apple-m1" }
 !27 = !{i32 2, !"Debug Info Version", i32 3}
 !28 = !{!"rustc version 1.86.0 (05f9846f8 2025-03-31)"}
 !29 = distinct !DICompileUnit(language: DW_LANG_Rust, file: !30, producer: "clang LLVM (rustc version 1.86.0 (05f9846f8 2025-03-31))", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !31, globals: !44, splitDebugInlining: false, nameTableKind: None)
-!30 = !DIFile(filename: "typegate_demo.rs/@/typegate_demo.5e6a099dc21d582d-cgu.0", directory: "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/experiments/typegate-demo")
+!30 = !DIFile(filename: "typegate_demo.rs/@/typegate_demo.5e6a099dc21d582d-cgu.0", directory: "/workspace/crux/experiments/typegate-demo")
 !31 = !{!32, !40}
 !32 = !DICompositeType(tag: DW_TAG_enumeration_type, name: "Alignment", scope: !33, file: !2, baseType: !35, size: 8, align: 8, flags: DIFlagEnumClass, elements: !36)
 !33 = !DINamespace(name: "fmt", scope: !34)
@@ -828,7 +828,7 @@ attributes #5 = { "frame-pointer"="non-leaf" "target-cpu"="apple-m1" }
 !447 = !DILocation(line: 2427, column: 15, scope: !441)
 !448 = !DILocation(line: 2429, column: 6, scope: !441)
 !449 = distinct !DISubprogram(name: "authorize", linkageName: "_ZN13typegate_demo9authorize17h92f2dc252dceb235E", scope: !394, file: !450, line: 26, type: !451, scopeLine: 26, flags: DIFlagPrototyped, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !29, templateParams: !23, retainedNodes: !454)
-!450 = !DIFile(filename: "typegate_demo.rs", directory: "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/experiments/typegate-demo", checksumkind: CSK_MD5, checksum: "780c98304728ae1a153dfe63af974082")
+!450 = !DIFile(filename: "typegate_demo.rs", directory: "/workspace/crux/experiments/typegate-demo", checksumkind: CSK_MD5, checksum: "780c98304728ae1a153dfe63af974082")
 !451 = !DISubroutineType(types: !452)
 !452 = !{!453, !392}
 !453 = !DIBasicType(name: "bool", size: 8, encoding: DW_ATE_boolean)

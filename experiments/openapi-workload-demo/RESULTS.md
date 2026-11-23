@@ -77,8 +77,8 @@ crux_runtime context is a tokio task-local, so it does not apply to a sync serve
 
 ```sh
 cd app && cargo build
-CRUX_TRACE_PATH=/tmp/afg_notes.jsonl ADDR=127.0.0.1:8085 ./target/debug/notes_app &   # ships /api-docs/openapi.json
+CRUX_TRACE_PATH=/tmp/crux_notes.jsonl ADDR=127.0.0.1:8085 ./target/debug/notes_app &   # ships /api-docs/openapi.json
 cd ../driver && cargo build
-./target/debug/crux_workload http://127.0.0.1:8085 /tmp/afg_notes.jsonl
+./target/debug/crux_workload http://127.0.0.1:8085 /tmp/crux_notes.jsonl
 # prints the spec-driven response verdict AND the crux_observe native verdict; exits non-zero on a leak
 ```

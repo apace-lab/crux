@@ -1,16 +1,18 @@
-# Shared config for the tabby AFG reproduction scripts. Override any of these via
-# the environment; the defaults match the dev machine this was first run on (macOS).
-export AFG_ROOT="${AFG_ROOT:-/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG}"
-export TABBY="${TABBY:-/Users/sanjib/codes/apace_lab/tabby}"
+# Shared config for the Tabby CRUX reproduction scripts. Override any of these via
+# the environment; by default CRUX_ROOT resolves relative to this script's repo.
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export KIT
+DEFAULT_ROOT="$(cd "$KIT/../../.." && pwd)"
+export CRUX_ROOT="${CRUX_ROOT:-$DEFAULT_ROOT}"
+export CRUX_DIR="${CRUX_DIR:-$(cd "$KIT/../.." && pwd)}"
+export TABBY="${TABBY:-$CRUX_ROOT/../tabby}"
 export LLVM_SYS_191_PREFIX="${LLVM_SYS_191_PREFIX:-/opt/homebrew/opt/llvm@19}"
 export RUST="${RUST:-+1.85.0}"                 # toolchain for tabby + .ll emit (LLVM-19)
 export DB="${DB:-/tmp/tabby_build.db}"          # schema-only sqlite for sqlx query! macros
 export DATABASE_URL="sqlite://$DB"
 
-KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export KIT
 export OUT="$KIT/out"
-export AFG_BIN="$AFG_ROOT/afg_prototype/target/debug/afg"
-export SIGS="$AFG_ROOT/rail-rs/signatures"
-export DASH="$AFG_ROOT/afg_prototype/afg_dashboard"
+export CRUX_BIN="$CRUX_DIR/target/debug/crux"
+export SIGS="$CRUX_ROOT/rail-rs/signatures"
+export DASH="$CRUX_DIR/crux_dashboard"
 mkdir -p "$OUT"

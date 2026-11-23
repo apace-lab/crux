@@ -67,7 +67,7 @@ observable directly.
    collaborator insert) and `leave_room` (delete participant plus collaborator) are each
    single transactions (`db/queries/projects.rs`, `db/queries/rooms.rs`).
 4. Dynamic confirmation and sweeps: run the tests
-   `channel_buffer_tests::{test_afg_removed_member_persistent_leak, test_afg_banned_member_still_receives_edits, test_afg_join_removal_race, test_afg_project_leave_no_leak}`
+   `channel_buffer_tests::{test_crux_removed_member_persistent_leak, test_crux_banned_member_still_receives_edits, test_crux_join_removal_race, test_crux_project_leave_no_leak}`
    with `CRUX_TRACE_PATH` set, then take the verdict with `crux_observe`. Commands and
    sweep scripts are in `RESULTS.md`.
 

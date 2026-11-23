@@ -51,7 +51,7 @@ Scenario: run dufs with two users, `alice:...@/alice:rw` and `bob:...@/bob:rw`, 
 serve tree with `/alice/secret.txt` and `/bob/secret.txt`. alice reads her own file; bob
 attempts alice's file; bob reads his own file.
 
-The probe produced a 3-event trace (`results/afg_trace.jsonl`):
+The probe produced a 3-event trace (`results/crux_trace.jsonl`):
 
 ```
 seq1 Read alice file:alice/secret.txt count=1  950001  (alice authorized -> served; owner)
@@ -59,7 +59,7 @@ seq2 Read bob   file:alice/secret.txt count=0  950001  (bob DENIED -> dominated;
 seq3 Read bob   file:bob/secret.txt   count=1  950001  (bob authorized to his own)
 ```
 
-`crux_observe` (`results/afg_observe_verdict.txt`) reports:
+`crux_observe` (`results/crux_observe_verdict.txt`) reports:
 
 ```
 coarse PANode overlaps (static-style signal): 1   (alice and bob both reach node 9500)
@@ -87,13 +87,13 @@ cargo build --release --features crux-probe
 mkdir -p /tmp/dufs_demo/alice /tmp/dufs_demo/bob
 echo ALICE-SECRET > /tmp/dufs_demo/alice/secret.txt
 echo BOB-SECRET   > /tmp/dufs_demo/bob/secret.txt
-CRUX_TRACE_PATH=/tmp/dufs_afg.jsonl ./target/release/dufs /tmp/dufs_demo -p 5080 \
+CRUX_TRACE_PATH=/tmp/dufs_crux.jsonl ./target/release/dufs /tmp/dufs_demo -p 5080 \
   -a "alice:alicepass@/alice:rw" -a "bob:bobpass@/bob:rw" &
 curl --anyauth -u alice:alicepass http://127.0.0.1:5080/alice/secret.txt   # 200
 curl --anyauth -u bob:bobpass     http://127.0.0.1:5080/alice/secret.txt   # 403
 curl --anyauth -u bob:bobpass     http://127.0.0.1:5080/bob/secret.txt     # 200
-cd ../AFG/crux
-cargo run --example analyze_trace -- /tmp/dufs_afg.jsonl
+cd ../crux
+cargo run --example analyze_trace -- /tmp/dufs_crux.jsonl
 ```
 
 Expect: alice reads her own file, bob is denied alice's file and reads his own, and

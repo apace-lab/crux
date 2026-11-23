@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# STATIC stage: emit tabby-webserver LLVM IR (rustc 1.85 -> LLVM 19) and run the
-# AFG producer to find the MUMP instrumentation sites (auth + LLM + data-access).
+# STATIC stage: emit tabby-webserver LLVM IR (rustc 1.85 -> LLVM 19) and run
+# CRUX (PSA + ACE) to find the instrumentation sites (auth + LLM + data-access).
 set -euo pipefail
 source "$(dirname "$0")/config.sh"
 
 [ -f "$DB" ] || { echo "run 01_schema_db.sh first (need $DB)"; exit 1; }
-[ -x "$AFG_BIN" ] || { echo "afg binary not built at $AFG_BIN; build it: (cd $AFG_ROOT/afg_prototype && LLVM_SYS_191_PREFIX=$LLVM_SYS_191_PREFIX cargo build --bin afg)"; exit 1; }
+[ -x "$CRUX_BIN" ] || { echo "crux binary not built at $CRUX_BIN; build it: (cd $CRUX_DIR && LLVM_SYS_191_PREFIX=$LLVM_SYS_191_PREFIX cargo build --bin crux)"; exit 1; }
 
 echo "[1/2] emit tabby-webserver LLVM IR (this is large, ~380M, a few minutes)"
 ( cd "$TABBY" && cargo $RUST rustc -p tabby-webserver --lib -- \
@@ -13,8 +13,8 @@ echo "[1/2] emit tabby-webserver LLVM IR (this is large, ~380M, a few minutes)"
 LL="$(ls -t "$TABBY"/target/debug/deps/tabby_webserver-*.ll | head -1)"
 echo "      ll: $LL ($(du -h "$LL" | cut -f1))"
 
-echo "[2/2] AFG producer (static-only). AFG_APP_CRATE lets it analyze a lib crate."
-AFG_APP_CRATE=tabby_webserver "$AFG_BIN" --static-only \
+echo "[2/2] CRUX static pass (PSA + ACE). CRUX_APP_CRATE scopes workspace analysis."
+CRUX_APP_CRATE=tabby_webserver "$CRUX_BIN" --static-only \
   --llvm-ir "$LL" \
   --project "$TABBY" \
   --llm-api "$SIGS/llm_api_functions.json" \

@@ -79,7 +79,7 @@ cd experiments/async-complex-demo
 rustc +1.86.0 --edition 2021 --crate-type bin --emit=llvm-ir \
   -C opt-level=0 -C debuginfo=2 -C codegen-units=1 complex.rs -o complex_dbg.ll
 cd ../../
-LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=complex ./target/release/afg \
+LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=complex ./target/release/crux \
   --llvm-ir experiments/async-complex-demo/complex_dbg.ll \
   --ac experiments/async-complex-demo/demo_ac.json \
   --data-access experiments/async-complex-demo/demo_data.json \

@@ -7,5 +7,5 @@ edition = "2021"
 name = "autoinstr_demo"
 path = "src/main.rs"
 
-[dependencies.afg_runtime]
-path = "/Users/sanjib/codes/apace_lab/soap_afg_2026/repositories/AFG/afg_prototype/afg_runtime"
+[dependencies.crux_runtime]
+path = "../../../../crux_runtime"

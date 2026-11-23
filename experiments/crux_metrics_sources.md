@@ -1,6 +1,6 @@
 # CRUX metrics table - source of every number
 
-Companion to `afg_metrics_table.tex`. Each cell traces to a measurement so the
+Companion to `crux_metrics_table.tex`. Each cell traces to a measurement so the
 paper's numbers are reproducible. Measured 2026-09-22 unless noted.
 
 ## Verdicts / mechanisms (from each results/RESULTS.md)

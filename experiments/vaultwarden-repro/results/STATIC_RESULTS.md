@@ -5,7 +5,7 @@ vaultwarden's own pinned toolchain (rustc 1.84.1 -> LLVM 19.1.5, sqlite backend,
 `-C debuginfo=2`). It settles two things: the pipeline scales to a real large app, and the
 static dominance / debug-type gate hits a real limitation on framework-guard auth.
 
-Run on the lab server (`afg` built there against the installed LLVM-19 dev libs). IR size:
+Run on the lab server (`crux` built there against the installed LLVM-19 dev libs). IR size:
 909 MB (`vaultwarden-*.ll`). Catalogs: `Membership::find_*` as authorization checks,
 `Cipher::find_*` as data reads (`vw_ac.json`, `vw_data.json`).
 
@@ -133,4 +133,4 @@ static dominance pass and the debug-type gate are a precision enhancement demons
 flip a verdict on direct-call dominance (`experiments/typegate-demo`); making them precise on
 async framework handlers requires async-method matching and coroutine-aware dominance, which
 are recorded here as characterized future work rather than claimed. The step-2 catalogs used
-for this analysis are on the lab server (`~/afg/vw_ac2.json`, `~/afg/vw_data2.json`).
+for this analysis are on the lab server (`~/crux/vw_ac2.json`, `~/crux/vw_data2.json`).

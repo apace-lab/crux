@@ -51,8 +51,8 @@ Tokio task-local, on purpose: DataFusion not propagating task-locals across
 `scan`/`execute` was one of the two cross-principal collapse bugs spiceai already fixed.
 
 Driving spiceai's own two-principal (alice/bob) isolation scenario with the probe active
-produced a 12-event trace (`afg_trace.jsonl`). CRUX's analyzer `crux_observe`
-(`afg_observe_verdict.txt`) reports:
+produced a 12-event trace (`crux_trace.jsonl`). CRUX's analyzer `crux_observe`
+(`crux_observe_verdict.txt`) reports:
 
 - 1 coarse PANode overlap (both principals reach the cache nodes 9100 and 9200, the
   static-style shared-resource signal);
@@ -118,13 +118,13 @@ Run these from the spiceai repo root (`cd spiceai`).
 3. Confirm the fail-open derivation and the stable ids:
    `grep -n "fn cache_namespace" crates/runtime-request-context/src/context.rs` and
    `grep -n "fn stable_id" crates/runtime-auth/src/traits.rs`.
-4. CRUX-native dynamic confirmation (produces `afg_trace.jsonl` and the verdict):
+4. CRUX-native dynamic confirmation (produces `crux_trace.jsonl` and the verdict):
    ```sh
-   CRUX_TRACE_PATH=/tmp/spiceai_afg_trace.jsonl \
+   CRUX_TRACE_PATH=/tmp/spiceai_crux_trace.jsonl \
      cargo test -p runtime --test integration --features duckdb,crux-probe -- \
      acceleration::caching_mode_per_principal::caching_accelerator_isolates_per_principal_e2e --nocapture
-   cd ../AFG/crux
-   cargo run --example analyze_trace -- /tmp/spiceai_afg_trace.jsonl
+   cd ../crux
+   cargo run --example analyze_trace -- /tmp/spiceai_crux_trace.jsonl
    ```
 
 Expect: both cache surfaces namespace their keys, the principal is derived per request,

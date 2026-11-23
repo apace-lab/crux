@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# AFG RustFS validation: provision two tenants.
+# CRUX RustFS validation: provision two tenants.
 #   user A (keyA): full access to bucket "bucketa" only
 #   user B (keyB): full access to bucket "bucketb" only, NO access to bucketa
 # Root (rustfsadmin) creates the buckets and the IAM users/policies.

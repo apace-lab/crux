@@ -1,5 +1,5 @@
 #!/bin/bash
-# AFG RustFS cross-tenant leak workload (CVE-2026-39360).
+# CRUX RustFS cross-tenant leak workload (CVE-2026-39360).
 # Uses aws-cli v2 (s3api) against the local RustFS endpoint with path-style addressing.
 set -u
 AWS=~/rustfs_build/tools/aws-bin/aws

@@ -68,7 +68,7 @@ struct Cli {
     #[arg(long, default_value = "test")]
     cargo_cmd: String,
 
-    /// Run only the static stage (PAG + taint analysis + overlap detection) and
+    /// Run only the static stage (PAG + PSA + ACE candidate detection) and
     /// stop after writing the instrumentation plan. Use this on a compiled
     /// real-world app when its source is not available for instrumentation.
     #[arg(long, default_value_t = false)]
@@ -121,7 +121,7 @@ fn node_loc(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>, node_id: usize) ->
 /// the secret as their first argument, not the user, so they are credential
 /// checks: the principal is established at a separate token / session / identity
 /// point. Only principal-establishing points get an `crux_auth!` site. Keying this
-/// on the matched catalog function (which the taint analysis already resolved) is
+/// on the matched catalog function (which PSA already resolved) is
 /// more reliable than inspecting the source line at instrument time.
 fn establishes_principal(matched_fn_name: &str, principal_from_return: bool) -> bool {
     // An entry that explicitly declares the principal in the call's return value
@@ -239,9 +239,10 @@ fn compute_data_resource_ids(engine: &rail_rs::PrincipalSensitiveAnalysis<'_>) -
     out
 }
 
-/// Adapter between this prototype and our existing rail-rs + nested taint analysis.
+/// Adapter between the CRUX driver and rail-rs's PSA and ACE static passes.
 ///
-/// Parses the LLVM IR, runs the PAG + taint analysis, and emits an
+/// Parses the LLVM IR, runs PAG construction, Principal-Sensitive Analysis (PSA),
+/// and Access-Control Enforcement (ACE), and emits an
 /// `InstrumentationPlan`: `Auth` sites at access-control points (so the runtime
 /// per-user principal is established) and `Access` sites at LLM calls and any
 /// statically-detected cross-user overlaps. The dynamic stages then distinguish
@@ -351,10 +352,10 @@ fn run_pag_and_crux(
     let struct_fields = debug_types.struct_field_index();
     analysis.set_debug_types(debug_types);
 
-    // Build the PAG (crux mode) and run the taint analysis.
+    // Build the PAG (crux mode) and run Principal-Sensitive Analysis (PSA).
     let engine = analysis.psa("crux", None);
     println!(
-        "      taint analysis: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
+        "      psa: app_crate={:?}, {} semantic points, {} principals, {} tagged nodes",
         engine.app_crate,
         engine.semantic_points.len(),
         engine.active_principals.len(),

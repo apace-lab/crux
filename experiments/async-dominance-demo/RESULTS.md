@@ -66,7 +66,7 @@ rustc +1.86.0 --edition 2021 --crate-type bin --emit=llvm-ir \
 cd ../../
 # plain dominance (await breaks it):
 LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=async_demo CRUX_NO_COROUTINE_DOM=1 \
-  ./target/release/afg --llvm-ir experiments/async-dominance-demo/async_demo_dbg.ll \
+  ./target/release/crux --llvm-ir experiments/async-dominance-demo/async_demo_dbg.ll \
   --ac experiments/async-dominance-demo/demo_ac.json \
   --data-access experiments/async-dominance-demo/demo_data.json \
   --llm-api experiments/async-dominance-demo/demo_llm.json --static-only

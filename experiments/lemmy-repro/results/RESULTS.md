@@ -74,7 +74,7 @@ crypto is needed): an admin is created by the config setup, then registration is
 `alice`, `bob`, `carol` register; alice sends a private message to bob; carol (a
 non-participant) reports it; bob (the recipient, a participant) reports it as the control.
 
-The probe produced a 3-event trace (`results/afg_trace.jsonl`):
+The probe produced a 3-event trace (`results/crux_trace.jsonl`):
 
 ```
 seq1 Write person:3(alice) pm:1  960001 create        (alice sends the PM -> owner)
@@ -82,7 +82,7 @@ seq2 Read  person:5(carol) pm:1  960002 report count=1 (carol is NOT a participa
 seq3 Write person:4(bob)   pm:1  960002 report        (bob is the recipient -> authorized)
 ```
 
-`crux_observe` (`results/afg_observe_verdict.txt`) reports:
+`crux_observe` (`results/crux_observe_verdict.txt`) reports:
 
 ```
 coarse PANode overlaps (static-style signal): 3   (alice, bob, carol all reach node 9600)
@@ -114,12 +114,12 @@ PostgreSQL backend links against `libpq`.
 cd lemmy019   # LemmyNet/lemmy at tag 0.19.0, translations submodule at its pinned commit
 cargo +1.75.0 build --release --bin lemmy_server --locked
 # postgres (Docker) on :5433; config.hjson with the db uri and an admin setup block
-LEMMY_CONFIG_LOCATION=config.hjson CRUX_TRACE_PATH=/tmp/lemmy_afg.jsonl ./target/release/lemmy_server &
+LEMMY_CONFIG_LOCATION=config.hjson CRUX_TRACE_PATH=/tmp/lemmy_crux.jsonl ./target/release/lemmy_server &
 # admin login -> open registration; register alice/bob/carol; alice PMs bob;
 # carol (non-participant) POST /api/v3/private_message/report -> receives the content;
 # bob (recipient) reports as the control.
-cd ../AFG/crux
-cargo run --example analyze_trace -- /tmp/lemmy_afg.jsonl
+cd ../crux
+cargo run --example analyze_trace -- /tmp/lemmy_crux.jsonl
 ```
 
 Expect: carol's report returns alice's PM content, and `crux_observe` reports 1 confirmed

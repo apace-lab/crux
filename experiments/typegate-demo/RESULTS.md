@@ -69,7 +69,7 @@ rustc +1.86.0 --edition 2021 --crate-type bin --emit=llvm-ir \
 cd ../../
 # gate off:
 LLVM_SYS_191_PREFIX=/opt/homebrew/opt/llvm@19 CRUX_APP_CRATE=typegate_demo CRUX_NO_TYPE_GATE=1 \
-  ./target/release/afg --llvm-ir experiments/typegate-demo/typegate_demo_dbg.ll \
+  ./target/release/crux --llvm-ir experiments/typegate-demo/typegate_demo_dbg.ll \
   --ac experiments/typegate-demo/demo_ac.json \
   --data-access experiments/typegate-demo/demo_data.json \
   --llm-api experiments/typegate-demo/demo_llm.json --static-only

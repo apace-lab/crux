@@ -149,17 +149,17 @@ cargo run -- --run-dir ../runs/test-001   # or: --trace path/to/trace.jsonl
 ```
 
 
-## Example demo
+## Example demos
 
-[afg-demo](https://github.com/sanjib-sen/afg-demo) is a companion repo: a
-runnable multi-user chat service with real login and LLM integration, run live
-on real `tokio` (not MadSim). Its [`run.sh`](https://github.com/sanjib-sen/afg-demo/blob/main/run.sh) script
-drives the whole thing end to end - see its README for the full walkthrough.
+[`examples/example-app/`](examples/example-app) and `../rail-rs/examples/mini-chat-service`
+provide runnable multi-user chat services with authentication and LLM integration
+for testing the pipeline end to end (see their respective `README.md` files for
+full walkthroughs).
 
-To be specific, `crux --instrument-only` finds and instruments its
+To be specific, `crux --instrument-only` finds and instruments the service's
 auth check and LLM call automatically; the app's own shared answer cache is
-what turns one user's cached answer into another user's leak. A built-in admin
-console shows the live trace, per-principal scopes, and detected overlaps via our dashboard.
+what turns one user's cached answer into another user's leak. The `crux_dashboard`
+web console shows the recorded trace, per-principal scopes, and detected leaks.
 
 
 

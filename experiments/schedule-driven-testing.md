@@ -29,13 +29,13 @@ Schedule-driven testing has three components and one loop.
    madsim. CRUX's own scheduler with madsim replay is exercised on a controlled demo,
    see `scheduler-demo-repro/results/RESULTS.md`.)
 
-2. Probes. `crates/collab/src/afg_probe.rs` plus call sites in `crates/collab/src/rpc.rs`
+2. Probes. `crates/collab/src/crux_probe.rs` plus call sites in `crates/collab/src/rpc.rs`
    record, per principal: the membership check outcome, the channel-buffer read at
    join (`join_channel_buffer`), and the delivery of each edit to each recipient in the
    `update_channel_buffer` broadcast. Each run writes a JSONL trace to the path in the
    `CRUX_TRACE_PATH` environment variable; with the variable unset the probes are no-ops.
 
-3. Verdict (`afg_prototype/crux_observe`). It reads a trace and applies the
+3. Verdict (`crux/crux_observe`). It reads a trace and applies the
    resource-linked rule: for each resource instance, the owner is the first principal
    to write it; if another principal reads that instance and is served rows (count > 0),
    that is a confirmed leak. This distinguishes a coarse overlap (two principals reach
@@ -67,7 +67,7 @@ edits over that connection; a client that ignores the removal reads them. This i
 reported in `zed-repro/DISCLOSURE.md`.
 
 The schedule-dependent form arises when the removal and a fresh join are concurrent
-(`channel_buffer_tests::test_afg_join_removal_race`): member B has not opened the
+(`channel_buffer_tests::test_crux_join_removal_race`): member B has not opened the
 buffer; admin A removes B while B opens it. The outcome is decided by which
 transaction wins the SQLite write lock:
 
@@ -97,7 +97,7 @@ membership: `join_project` performs its access check and the collaborator insert
 transaction, and `leave_room` deletes the room participant and the project collaborator
 in one transaction, so no window leaves a departed guest as a collaborator.
 
-`channel_buffer_tests::test_afg_project_leave_no_leak`: A hosts a shared project, B and
+`channel_buffer_tests::test_crux_project_leave_no_leak`: A hosts a shared project, B and
 C join, B leaves the room, A changes a file. The worktree-delivery probe shows the
 post-leave update reaches C only, never B, on all 20 seeds (B: 0/20, C: 20/20). The
 same criterion flags the channel-buffer subsystem and clears the project subsystem; the
@@ -127,7 +127,7 @@ for the concurrency-timing subset, of which zed is a real-world instance.
 Environment: a Linux host with Docker. The image is `rust:1.98-bookworm` plus zed's
 Linux build dependencies and `protobuf-compiler`, built with `CC=clang CXX=clang++`
 (webrtc-sys does not build under g++). zed source at commit `739fdbe`, with
-`crates/collab/src/afg_probe.rs` and the probe call sites in `rpc.rs` applied, and the
+`crates/collab/src/crux_probe.rs` and the probe call sites in `rpc.rs` applied, and the
 tests in `crates/collab/tests/integration/channel_buffer_tests.rs`.
 
 Build the test binary once:
@@ -147,15 +147,15 @@ docker run --rm -v <zed>:/zed -v zed_target:/target ... \
   -e CARGO_TARGET_DIR=/target -e CRUX_TRACE_PATH=/zed/trace.jsonl -e SEED=2 -w /zed <image> \
   bash -c 'export PATH=/usr/local/cargo/bin:$PATH; \
     cargo test -p collab --test collab_tests --features test-support -- \
-    channel_buffer_tests::test_afg_join_removal_race --exact'
+    channel_buffer_tests::test_crux_join_removal_race --exact'
 ```
 
-Sweep 40 seeds and classify each as leak or clean: `zed-repro` ships `afg_race2_sweep.sh`
-(race) and `afg_projleave_sweep.sh` (project control); each loops `SEED` from 0 to N-1,
+Sweep 40 seeds and classify each as leak or clean: `zed-repro` ships `crux_race2_sweep.sh`
+(race) and `crux_projleave_sweep.sh` (project control); each loops `SEED` from 0 to N-1,
 writes one trace per seed, and records leak/clean to a CSV. Take the verdict on a trace:
 
 ```sh
-cd afg_prototype/crux_observe
+cd crux/crux_observe
 cargo run --example analyze -- <trace>.jsonl
 ```
 
@@ -215,6 +215,6 @@ traces) and `zed-repro/results/projleave/` (project control sweep).
 - `zed-repro/results/race2/`: the 40-seed race sweep (CSV and traces).
 - `zed-repro/results/projleave/`: the project-control sweep.
 - `zed-repro/DISCLOSURE.md`: the maintainer report.
-- `afg_metrics_table.tex`: the cross-app metrics table (the schedule-dependent leak is
+- `crux_metrics_table.tex`: the cross-app metrics table (the schedule-dependent leak is
   footnote m).
 - `schedule-driven-testing-section.tex`: the paper section (algorithm and figure).

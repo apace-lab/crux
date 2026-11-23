@@ -19,7 +19,7 @@ Run on the real collab server via zed's own integration harness (`TestServer` +
 (gpui blade backend, no Metal; `CC=clang CXX=clang++` for webrtc-sys). Not a mimic:
 the server code, RPC, DB queries, and the guard are all real zed.
 
-### Trace 1 - non-member denied (`afg_trace_denied.jsonl`)
+### Trace 1 - non-member denied (`crux_trace_denied.jsonl`)
 
 Scenario: user A creates a private channel with no other members and writes to the
 buffer; user B (not a member) sends the raw `JoinChannelBuffer` RPC straight to the
@@ -46,7 +46,7 @@ resource-linked leak verdict: 0 confirmed leak(s)
   none: dominated by an ownership check
 ```
 
-### Trace 2 - both members (`afg_trace_core.jsonl`)
+### Trace 2 - both members (`crux_trace_core.jsonl`)
 
 Scenario: A and B are both channel members; both open the buffer (zed's own
 `test_core_channel_buffers`).
@@ -75,7 +75,7 @@ Real zed: the collab server, the RPC handlers (`join_channel_buffer`,
 integration harness. Hand-added: `crates/collab/src/crux_probe.rs` (the JSONL emitter,
 a no-op unless `CRUX_TRACE_PATH` is set), two probe calls in `rpc.rs`
 (`crux_probe::auth` at the handler entry, `crux_probe::access` right after the DB read),
-and the `test_afg_non_member_denied` integration test that drives the malicious-client
+and the `test_crux_non_member_denied` integration test that drives the malicious-client
 path. Node id 7300 stands for the shared channel-buffer store the overlap analysis
 flags.
 
@@ -84,16 +84,16 @@ flags.
 ```sh
 # base image: rust:1.98-bookworm + zed linux deps + protobuf-compiler, CC/CXX=clang
 docker run --rm \
-  -v ~/afg/zed:/zed -v zed_target:/target \
+  -v ~/crux/zed:/zed -v zed_target:/target \
   -v zed_cargo_reg:/usr/local/cargo/registry -v zed_cargo_git:/usr/local/cargo/git \
-  -e CARGO_TARGET_DIR=/target -e CRUX_TRACE_PATH=/zed/afg_trace_denied.jsonl \
-  -w /zed zed-afg:base bash -c 'export PATH=/usr/local/cargo/bin:$PATH; \
+  -e CARGO_TARGET_DIR=/target -e CRUX_TRACE_PATH=/zed/crux_trace_denied.jsonl \
+  -w /zed zed-crux:base bash -c 'export PATH=/usr/local/cargo/bin:$PATH; \
     cargo test -p collab --test collab_tests --features test-support -- \
-    channel_buffer_tests::test_afg_non_member_denied --exact --nocapture'
+    channel_buffer_tests::test_crux_non_member_denied --exact --nocapture'
 
 # verdict:
 cd crux/crux_observe
-cargo run --example analyze -- ../experiments/zed-repro/results/afg_trace_denied.jsonl
+cargo run --example analyze -- ../experiments/zed-repro/results/crux_trace_denied.jsonl
 ```
 
 ## Metrics (seed / interleaving / timing sweeps)
@@ -164,9 +164,9 @@ tear the session down. It is the exact failure the CRUX dominance invariant targ
 (a shared-resource access that is not dominated by an ownership check for the
 current principal on ALL paths).
 
-Test `channel_buffer_tests::test_afg_removed_member_persistent_leak`: A and B are
+Test `channel_buffer_tests::test_crux_removed_member_persistent_leak`: A and B are
 members, both open the buffer; A removes B; A then makes 3 edits (each fully
-drained). Trace `results/afg_trace_persistent.jsonl`:
+drained). Trace `results/crux_trace_persistent.jsonl`:
 
 ```
 write  principal 1  channel:1  count 1     (A edit #1, post-removal)
@@ -179,7 +179,7 @@ read   principal 2  channel:1  count 1     (removed B delivered edit #3)   <- LE
 
 `crux_observe`: `resource-linked leak verdict: 3 confirmed leak(s)` (B, a non-member,
 served A's channel:1 on every edit). The single-edit case is
-`results/afg_trace_removed_drained.jsonl` (1 leak).
+`results/crux_trace_removed_drained.jsonl` (1 leak).
 
 Instrumentation added for this: a delivery probe in the `update_channel_buffer`
 handler (rpc.rs) that maps each broadcast recipient ConnectionId to its principal
@@ -207,7 +207,7 @@ B opens the buffer CONCURRENTLY (no drain between the two RPCs). Two orderings:
   the collaborator -> B is a stale collaborator and receives A subsequent edits.
 
 Which ordering happens is decided by the executor schedule (seed). Sweep of
-`channel_buffer_tests::test_afg_join_removal_race` over 40 seeds:
+`channel_buffer_tests::test_crux_join_removal_race` over 40 seeds:
 
 ```
 b_join wins (leak):   15 / 40 seeds  (37.5%)
@@ -236,9 +236,9 @@ The same leak is reachable via role downgrade, not only removal. Demoting a memb
 to `Banned` (loses read access) through `set_channel_member_role` also fails to evict
 the buffer session (the handler calls `notify_membership_updated` but never removes
 the `channel_buffer_collaborator` row). Test
-`channel_buffer_tests::test_afg_banned_member_still_receives_edits`: after the ban, A
+`channel_buffer_tests::test_crux_banned_member_still_receives_edits`: after the ban, A
 edit is delivered to banned B; `crux_observe` = 1 confirmed leak
-(`afg_trace_banned.jsonl`). So the root cause is general (any access-losing
+(`crux_trace_banned.jsonl`). So the root cause is general (any access-losing
 membership transition, not just removal), which broadens both the finding and the
 required fix.
 
@@ -252,7 +252,7 @@ collaborator lifecycle is atomically coupled to room membership.
 - `leave_room` deletes the room participant AND the `project_collaborator` row in ONE
   transaction.
 
-Test `channel_buffer_tests::test_afg_project_leave_no_leak`: A hosts a shared project;
+Test `channel_buffer_tests::test_crux_project_leave_no_leak`: A hosts a shared project;
 B and C join as guests; B leaves the room (`hang_up`); A then changes a file. The
 worktree-delivery probe (node 7400) shows B and C both receive the pre-leave sync, but
 the POST-leave update is delivered only to C, never to B. Seed sweep (20 seeds):

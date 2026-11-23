@@ -63,8 +63,8 @@ consistent strings; the organization graph is seeded directly into SQLite):
   collection B.
 
 Driving the scenario (alice org-details, bob org-details, bob `/sync`) with the probe
-active produced a 5-event trace (`results/afg_trace.jsonl`). `crux_observe`
-(`results/afg_observe_verdict.txt`, via `cargo run --example analyze_trace`) reports:
+active produced a 5-event trace (`results/crux_trace.jsonl`). `crux_observe`
+(`results/crux_observe_verdict.txt`, via `cargo run --example analyze_trace`) reports:
 
 ```
 coarse PANode overlaps (static-style signal): 1
@@ -127,14 +127,14 @@ env DATA_FOLDER=/tmp/vw_data DATABASE_URL=/tmp/vw_data/db.sqlite3 \
 #   cipherA in A, cipherB in B.
 
 # 4. Second run with the trace active, then drive the scenario:
-env ... CRUX_TRACE_PATH=/tmp/vw_afg.jsonl ./target/release/vaultwarden &
+env ... CRUX_TRACE_PATH=/tmp/vw_crux.jsonl ./target/release/vaultwarden &
 #   login alice+bob (POST /identity/connect/token), then
 #   GET /api/ciphers/organization-details?organizationId=<org> as alice, then as bob,
 #   then GET /api/sync as bob (the collection-scoped control).
 
 # 5. Reach the verdict with CRUX's analyzer.
-cd ../AFG/crux
-cargo run --example analyze_trace -- /tmp/vw_afg.jsonl
+cd ../crux
+cargo run --example analyze_trace -- /tmp/vw_crux.jsonl
 ```
 
 ## What to expect

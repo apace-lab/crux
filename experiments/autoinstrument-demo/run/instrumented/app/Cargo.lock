@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "afg_runtime"
+name = "crux_runtime"
 version = "0.1.0"
 dependencies = [
  "madsim",
@@ -69,7 +69,7 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 name = "autoinstr_demo"
 version = "0.1.0"
 dependencies = [
- "afg_runtime",
+ "crux_runtime",
 ]
 
 [[package]]

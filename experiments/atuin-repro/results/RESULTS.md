@@ -67,7 +67,7 @@ server): register `alice` and `bob`; alice uploads a record under host `Ha`
 (`GET /api/v0/record/next?host=Hb`), then attempts bob reads alice's host
 (`GET /api/v0/record/next?host=Ha`).
 
-The probe produced a 3-event trace (`results/afg_trace.jsonl`):
+The probe produced a 3-event trace (`results/crux_trace.jsonl`):
 
 ```
 seq1 Write user:1(alice) store:94b5...  940001 add_records   (alice owns her record)
@@ -77,7 +77,7 @@ seq3 Read  user:2(bob)   store:50a3...  940002 next_records  count=1  (bob reads
 
 bob's cross-user request (`next?host=Ha`) returned an empty list, so `next_records` served
 zero rows and emitted no read event: the `where user_id = $1` predicate dominated the
-read. `crux_observe` (`results/afg_observe_verdict.txt`) reports:
+read. `crux_observe` (`results/crux_observe_verdict.txt`) reports:
 
 ```
 coarse PANode overlaps (static-style signal): 1   (alice and bob both reach node 9400)
@@ -103,7 +103,7 @@ cannot fetch another user's records even by supplying another user's host id.
 atuin pins rustc 1.86, which emits LLVM 19, so unlike dufs and vaultwarden (LLVM 20) the
 CRUX static producer runs on it. We generated LLVM-19 IR for `atuin-server-postgres` (the
 data-access crate) and ran the producer in static-only mode
-(`afg --static-only --llvm-ir atuin_server_postgres.ll`, with `CRUX_APP_CRATE=
+(`crux --static-only --llvm-ir atuin_server_postgres.ll`, with `CRUX_APP_CRATE=
 atuin_server_postgres`), using a local LLVM 19. Results:
 
 - The PAG + inclusion-based points-to solver runs and reaches a fixed point: **31,754 PAG
